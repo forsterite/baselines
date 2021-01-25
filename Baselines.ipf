@@ -1,9 +1,9 @@
 #pragma TextEncoding="UTF-8"
 #pragma rtGlobals=3
-#pragma version=3.2
+#pragma version=3.21
 #pragma IgorVersion=7
 #pragma moduleName=baselines
-#include <Readback ModifyStr>
+
 // Project Updater header
 static constant kProjectID=348 // the project node on IgorExchange
 static strconstant ksShortTitle="Baselines" // the project short title on IgorExchange
@@ -91,7 +91,7 @@ static constant kSILENT=0 // set kSILENT=1 to prevent some non-error output to h
 
 // list of matchstrings for waves to ignore
 // do not include "*_sub" in this list if you want to fit multiple baselines in sequence
-static strconstant ksIGNORE="*_sub;*_BL;"
+static strconstant ksIGNORE="*_BL;*_sub;"
 //static strconstant ksIGNORE="*_BL;"
 
 Menu "Analysis"
@@ -1182,12 +1182,11 @@ static function BL_appendToSameAxes(graphStr, traceStr, w, w_x, [w_rgb, offset, 
 	string s_Yax=StringByKey("YAXIS",s_info)
 	string s_flags=StringByKey("AXISFLAGS",s_info)
 	variable flagBits=GrepString(s_flags, "/R")+2*GrepString(s_flags, "/T")
-	offset = offset ? GetNumFromModifyStr(s_info,"offset","{",1) : 0
+	offset = offset ? GetOffsetFromInfoString(s_info, 1) : 0
 	
 	// get color of already plotted trace
-	variable c0,c1,c2
-	variable startIndex=strsearch(s_info, ";rgb(x)=", 0)
-	sscanf s_info[startIndex,strlen(s_info)-1], ";rgb(x)=(%d,%d,%d*", c0,c1,c2
+	variable c0, c1, c2
+	sscanf ListMatch(s_info, "rgb(x)=*"), "rgb(x)=(%d,%d,%d", c0, c1, c2
 	
 	if (matchRGB==0 && ParamIsDefault(w_rgb)) // no color specified
 		Make /free w_RGB={c0,c1,c2}, w_index={1,2,3}
@@ -1238,6 +1237,12 @@ static function BL_appendToSameAxes(graphStr, traceStr, w, w_x, [w_rgb, offset, 
 	ModifyGraph /W=$graphStr offset($NameOfWave(w))={0,offset}
 end
 
+static function GetOffsetFromInfoString(string s, int axis)
+	variable xOffset, yOffset
+	sscanf ListMatch(s, "offset(x)=*"), "offset(x)={%g,%g}", xOffset, yOffset
+	return axis ? yOffset : xOffset
+end
+
 // for Igor 6 compatibility
 // returns name of host window
 static function /T BL_getGraph()
@@ -1269,19 +1274,29 @@ static function /S BL_getTrace(graphStr)
 end
 
 // execute Baselines#makeSpectrum() to create a fake spectrum for demo
-static function makeSpectrum()
-
-	Make /n=1000 $(UniqueName("foo", 1, 0)) /WAVE=foo
-	variable a=enoise(5), b=enoise(1e-3), c=enoise(1e-5), d=enoise(400)
-	foo=gnoise(0.1)+a+b*x+c*(x-d)^2
-	variable i, height, position, width
-	for(i=0;i<5;i+=1)
-		height=150+enoise(50)
-		position=500+enoise(400)
-		width=20+enoise(10)
-		foo+=height*Gauss(x, position, width/sqrt(2))
+static function makeSpectrum([n])
+	variable n
+		
+	n=ParamIsDefault(n)?1:n
+	
+	variable numPeaks=5 // number of Gaussian peaks in the spectrum
+	string strName
+	variable a,b,c,d,i,j,height,position,width
+	
+	Display /K=1
+	for(i=0;i<n;i+=1)
+		strName=UniqueName("foo", 1, 0)
+		Make /n=1000 $(UniqueName("foo", 1, 0)) /WAVE=foo
+		a=enoise(5); b=enoise(1e-3); c=enoise(1e-5); d=enoise(400)
+		foo=gnoise(0.1)+a+b*x+c*(x-d)^2
+		for(j=0;j<numPeaks;j+=1)
+			height=150+enoise(50)
+			position=500+enoise(400)
+			width=20+enoise(10)
+			foo+=height*Gauss(x, position, width/sqrt(2))
+		endfor
+		AppendToGraph foo
 	endfor
-	Display /K=1 foo
 end
 
 
