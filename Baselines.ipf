@@ -1,9 +1,10 @@
 #pragma TextEncoding="UTF-8"
 #pragma rtGlobals=3
-#pragma version=4.63
+#pragma version=4.78
 #pragma IgorVersion=7
 #pragma ModuleName=baselines
 #pragma DefaultTab={3,20,4}
+#pragma hide=1
 
 // Project Updater header
 static constant kProjectID=348 // the project node on IgorExchange
@@ -45,7 +46,7 @@ static strconstant ksShortTitle="Baselines" // the project short title on IgorEx
 // Node editing mode can be toggled using a new, moveable (and, in Igor 9,
 // transparent) button.
 
-// A user-defined function can be used for both masked and automatic
+// User-defined functions can be used for both masked and automatic
 // iterative fitting.
 
 // New manual baselines use cursors for input.
@@ -59,17 +60,29 @@ static strconstant ksShortTitle="Baselines" // the project short title on IgorEx
 // See help file BaselinesHelp.ihf for usage notes
 
 // Version history
+// 4.78  Adds iterative smoothing spline and ARS baselines.
+//       Restores Igor 7 compatibility.
+// 4.76  Method for writing custom baseline definitions has changed.
+//       Updated help file with instructions for writing user-defined functions.
+// 4.75  Adds subfolder output option.
+// 4.73  Fixes preferences bug.
+// 4.72  Fixes bug that prevented overwrite dialog from appearing when output waves
+//       are saved in a data folder other than that currently selected.
+// 4.70  Adds Planck function for masked and auto fitting, could perhaps be used
+//       with the 'negative peaks' option to fit a continuum with downward-facing
+//       peaks.
+// 4.65  Fix for manual sigmoid when cursor G is at higher x value than cursor H
 // 4.62  Adds option to choose tab and fit type from commandline:
-//       baselines#initialise(tab=2,type=15,trace="foo") restarts with an 
+//       baselines#initialise(tab=2,type=15,trace="foo") restarts with an
 //       'arc hull' baseline.
 // 4.60  Bug fix for Igor 8, interpolate2 error when initialising spline nodes.
 //       Check for category traces when compiling list of eligible traces.
 //       Shortcut keys for adding and removing mask regions.
-// 4.50  Tangent baseline looks for a common tangent when 2 regions are masked, 
+// 4.50  Tangent baseline looks for a common tangent when 2 regions are masked,
 //	     and a horizontal tangent when only one region is masked.
 //		 Bug Fix: using the (undocumented) browser menu for Igor 9 to initialise
-//		 a baseline fit sometimes resulted in improperly scaled axes because the 
-//		 graph was not redrawn before initialisation. Fixed with a judiciously 
+//		 a baseline fit sometimes resulted in improperly scaled axes because the
+//		 graph was not redrawn before initialisation. Fixed with a judiciously
 //		 placed DoUpdate.
 // 4.40  Bug fix: On some computers the window hook was not being set correctly.
 //		 This happened because the hook function checked the window name against
@@ -79,14 +92,14 @@ static strconstant ksShortTitle="Baselines" // the project short title on IgorEx
 //		 masked and auto fit functions.
 //		 Some speed improvements achieved by using FastOp.
 //		 Added manual poly 5 function.
-// 		 Fixed a minor bug that found common tangents outside of the selected 
+// 		 Fixed a minor bug that found common tangents outside of the selected
 // 		 fitting range.
 //		 Added a SetVariable to change polynomial order.
 //		 Added a checkbox for fixing value of first fit coefficient in some
 //		 fit functions.
 //		 Fixed a cosmetic bug that affected the display of masked regions.
 //		 Added checks for procedure file version changes after init. This
-//		 enables a less ungraceful quit if an outdated baselines control panel 
+//		 enables a less ungraceful quit if an outdated baselines control panel
 // 		 is open in a saved experiment.
 // 3.40  Fit regions are now recorded in a 2D wave and the maskwave is set
 // 		 to match the fit regions. Previously fit regions were recorded
@@ -140,8 +153,20 @@ static strconstant ksShortTitle="Baselines" // the project short title on IgorEx
 // 1.10  7/23/07 added smoothed spline baseline
 // 1.00  7/3/07
 
-#define MarqueeMenus
+// thoughts about a more efficent method for fitting many waves.
 
+// use data browser to select many waves
+// extract settings from stored bls structure?
+// make a wave ref wave, and do a multithreaded wave assignment to create separate fitting threads
+// need to rewrite fitting functions to be threadsafe
+// fit must go straight to destination waves that are not shared between threads
+// fit wrapper function must be passed data and destination waves, no lookup from graph
+
+// baselinefit(datawave, destinationwave, auto, type)
+// no user fit allowed
+
+
+#define MarqueeMenus
 //#define debug
 
 // *** constant definitions ***
@@ -149,20 +174,20 @@ static strconstant ksShortTitle="Baselines" // the project short title on IgorEx
 static constant kMultithreadCutoff = 1e4 // wave assignments will be multithreaded for waves longer than this cutoff
 
 #if IgorVersion() >= 9 // allow fit functions added in later versions
-static strconstant ksMaskedTypes = "constant;line;poly;gauss;lor;voigt;sin;sigmoid;exp;dblexp;dblexp_peak;hillequation;power;log;lognormal;spline;tangent;"
+static strconstant ksMaskedTypes = "constant;line;poly;gauss;lor;voigt;sin;sigmoid;exp;dblexp;dblexp_peak;hillequation;power;log;lognormal;Planck;spline;tangent;"
 static strconstant ksManTypes    = "constant;line;poly;gauss;lor;sin;sigmoid;"
-static strconstant ksAutoTypes   = "constant;line;poly;gauss;lor;voigt;sin;sigmoid;exp;dblexp;dblexp_peak;hillequation;power;log;lognormal;arc hull;hull spline;"
+static strconstant ksAutoTypes   = "constant;line;poly;gauss;lor;voigt;sin;sigmoid;exp;dblexp;dblexp_peak;hillequation;power;log;lognormal;Planck;spline;ARS;arc hull;hull spline;"
 static strconstant ksSplineTypes = "cubic;Akima;PCHIP;linear;smoothing;"
 #else // use built-in fit functions available in Igor 7 and 8
-static strconstant ksMaskedTypes = "constant;line;poly;gauss;lor;sin;sigmoid;exp;dblexp;hillequation;power;lognormal;spline;tangent;"
+static strconstant ksMaskedTypes = "constant;line;poly;gauss;lor;sin;sigmoid;exp;dblexp;hillequation;power;lognormal;Planck;spline;tangent;"
 static strconstant ksManTypes    = "constant;line;poly;gauss;lor;sin;sigmoid;"
-static strconstant ksAutoTypes   = "constant;line;poly;gauss;lor;sin;sigmoid;exp;dblexp;hillequation;power;lognormal;arc hull;hull spline;"
+static strconstant ksAutoTypes   = "constant;line;poly;gauss;lor;sin;sigmoid;exp;dblexp;hillequation;power;lognormal;Planck;spline;ARS;arc hull;hull spline;"
 static strconstant ksSplineTypes = "cubic;Akima;PCHIP;linear;smoothing;"
 #endif
 
-static strconstant ksPackageName = Baselines
+static strconstant ksPackageName   = Baselines
 static strconstant ksPrefsFileName = acwBaselines.bin
-static constant    kPrefsVersion = 110
+static constant    kPrefsVersion   = 120
 
 // *** menus ***
 
@@ -171,13 +196,11 @@ menu "Analysis"
 end
 
 #if IgorVersion() >= 9
-
 menu "DataBrowserObjectsPopup"
 	"Start Baseline Correction", /Q, Baselines#BrowserInit()
 end
 
-static function BrowserInit()
-	
+static function BrowserInit()	
 	int i
 	string strItem = "", strList = ""
 	for (i=0;1;i++)
@@ -188,20 +211,20 @@ static function BrowserInit()
 		strList = AddListItem(strItem, strList)
 	endfor
 			
-	wave /wave wObjects = ListToWaveRefWave(strList, 1)
+	wave/wave wObjects = ListToWaveRefWave(strList, 1)
 
 	if (!numpnts(wObjects))
 		return 0
 	endif
 	int displayed = 0
 
-	for (wave /Z w : wObjects)
+	for (wave/Z w : wObjects)
 		if (WaveType(w, 1) == 1)
 			if (displayed == 0)
 				GetMouse
 				v_left *= 72 / ScreenResolution
 				v_top *= 72 / ScreenResolution
-				Display /W=(V_left-100, V_top-100, V_left+300, V_top+200)
+				Display/W=(V_left-100, V_top-100, V_left+300, V_top+200)
 				displayed = 1
 			endif
 			AppendToGraph w
@@ -213,7 +236,6 @@ static function BrowserInit()
 	endif
 	return 0
 end
-
 #endif
 
 #ifdef MarqueeMenus
@@ -237,11 +259,13 @@ static structure PackagePrefs
 	int16 options
 	// 1: add subtracted wave to plot, 2: add BL to plot, 4: remove original,
 	// 8: negative peaks, 16: nodes on trace, 32: don't recolor, 64: LHS panel,
-	// 128: overwrite without warning, 256: output to current DF
+	// 128: overwrite without warning, 256: output to current DF, 512: save mask
+	// 1024: use subfolders
 	float base // option for non-zero baseline reference level
 	char keyplus
 	char keyminus
-	char reserved[128 - 4 - 47 - 2 - 4 - 2]
+	char masksuff[20] // suffix for saved mask waves
+	char reserved[128 - 4 - 47 - 2 - 4 - 2 - 20] // 79 bytes used
 endstructure
 
 // set prefs structure to default values
@@ -250,6 +274,7 @@ static function PrefsSetDefaults(STRUCT PackagePrefs &prefs)
 	prefs.version  = kPrefsVersion
 	prefs.blsuff   = "_BL"
 	prefs.subsuff  = "_sub"
+	prefs.masksuff = "_mask"
 	prefs.tab      = 0
 	prefs.type[0]  = 0
 	prefs.type[1]  = 0
@@ -262,35 +287,38 @@ static function PrefsSetDefaults(STRUCT PackagePrefs &prefs)
 	prefs.keyplus  = 43
 	prefs.keyminus = 45
 	int i
-	for(i=0;i<(128-59);i+=1)
+	for(i=0;i<(128-79);i+=1)
 		prefs.reserved[i] = 0
 	endfor
 end
 
 static function PrefsLoad(STRUCT PackagePrefs &prefs)
-	LoadPackagePreferences /MIS=1 ksPackageName, ksPrefsFileName, 0, prefs
+	LoadPackagePreferences/MIS=1 ksPackageName, ksPrefsFileName, 0, prefs
 	if (V_flag!=0 || V_bytesRead==0)
 		PrefsSetDefaults(prefs)
 	elseif (prefs.version != kPrefsVersion)
 		// prefs definition may be changed
 		PrefsUpdate(prefs)
-	endif	
+	endif
 end
 
 static function PrefsUpdate(STRUCT PackagePrefs &prefs)
 	if (prefs.version < 100)
 		PrefsSetDefaults(prefs)
-	elseif (prefs.version < 110)
-		prefs.version  = 110
-		prefs.keyplus  = 43
-		prefs.keyminus = 45
-	endif	
+	else
+		if (prefs.version < 120)
+			prefs.keyplus  = 43
+			prefs.keyminus = 45
+			prefs.masksuff = "_mask"
+			prefs.version  = 120
+		endif
+	endif
 end
 
 static function PrefsSave(STRUCT BLstruct &bls)
-		
-	if (bls.version != GetProcVersion(""))
-		// if the definition of bls has changed, avoid writing to prefs 
+	int version = GetThisVersion()
+	if (bls.version != version)
+		// if the definition of bls has changed, avoid writing to prefs
 		return 0
 	endif
 	
@@ -306,6 +334,7 @@ static function PrefsSave(STRUCT BLstruct &bls)
 	prefs.nodes    = bls.nodes
 	prefs.blSuff   = bls.blSuff
 	prefs.subSuff  = bls.subSuff
+	prefs.masksuff = bls.masksuff
 	prefs.options  = bls.options
 	prefs.base     = bls.base
 	prefs.keyplus  = bls.keyplus
@@ -333,10 +362,11 @@ endstructure
 
 // *** bls structure ***
 // structure definition should not be altered except by extension.
-static structure blstruct
+// not static so that determined users can access internal parameters.
+structure blstruct
 	
 	char trace[255] // trace name
-	char graph[255] // graph name
+	char Graph[255] // graph name
 	char tab
 	char type[4] // selection number for type popup
 	char multi // set this for all-in-one fitting
@@ -373,12 +403,13 @@ static structure blstruct
 	// preferences
 	char blsuff[20]
 	char subsuff[20]
-	int16 options
+	char masksuff[20]
+	int16 options // see PackagePrefs stucture definition for details
 	char history // bit 0: print baseline parameters, 1: print SetBaselineRegion commands
 	float base // for non-zero baseline
 	
 	// bls definition extended for baselines version 4.30
-	int16 version // this will be set to procedure file version at time of initialisation	
+	int16 version // this will be set to procedure file version at time of initialisation
 	char peak // use 'peak' functions with no y0 offset
 	char polyorder
 	char FitFunc[32] // the name of the selected fitting function defined by type[tab]
@@ -387,11 +418,18 @@ static structure blstruct
 	char keyplus
 	char keyminus
 	
+	// for Planck function
+	char wavelength
+	
+	// for ARS, version 4.78
+	int16 arsits
+	float arssd
+	
 endstructure
 
 static function InitialiseStructure(STRUCT BLstruct &bls)
 	
-	bls.version = GetProcVersion("")
+	bls.version = GetThisVersion()
 	
 	STRUCT PackagePrefs prefs
 	PrefsLoad(prefs)
@@ -405,31 +443,34 @@ static function InitialiseStructure(STRUCT BLstruct &bls)
 	bls.roi.top	   = NaN
 	bls.roi.bottom = NaN
 	
-	bls.csr.C.x   = NaN
-	bls.csr.C.y   = NaN
-	bls.csr.D.x   = NaN
-	bls.csr.D.y   = NaN
-	bls.csr.E.x   = NaN
-	bls.csr.E.y   = NaN
-	bls.csr.F.x   = NaN
-	bls.csr.F.y   = NaN
-	bls.csr.G.x   = NaN
-	bls.csr.G.y   = NaN
-	bls.csr.H.x   = NaN
-	bls.csr.H.y   = NaN
-	bls.csr.I.x   = NaN
-	bls.csr.I.y   = NaN
-	bls.csr.J.x   = NaN
-	bls.csr.J.y   = NaN
-	bls.sd        = 1
-	bls.smoothing = 20
-	bls.flagF     = 1
-	bls.editmode  = 1
-	bls.multi     = 0
-	bls.hull      = 0
-	bls.cycles    = 0
-	bls.polyorder = 3
-	bls.peak      = 0
+	bls.csr.C.x    = NaN
+	bls.csr.C.y    = NaN
+	bls.csr.D.x    = NaN
+	bls.csr.D.y    = NaN
+	bls.csr.E.x    = NaN
+	bls.csr.E.y    = NaN
+	bls.csr.F.x    = NaN
+	bls.csr.F.y    = NaN
+	bls.csr.G.x    = NaN
+	bls.csr.G.y    = NaN
+	bls.csr.H.x    = NaN
+	bls.csr.H.y    = NaN
+	bls.csr.I.x    = NaN
+	bls.csr.I.y    = NaN
+	bls.csr.J.x    = NaN
+	bls.csr.J.y    = NaN
+	bls.sd         = 1
+	bls.smoothing  = 20
+	bls.flagF      = 1
+	bls.editmode   = 1
+	bls.multi      = 0
+	bls.hull       = 0
+	bls.cycles     = 0
+	bls.polyorder  = 3
+	bls.peak       = 0
+	bls.wavelength = 1
+	bls.arsits     = 25
+	bls.arssd      = 10
 	
 	// load last-used settings from prefs, with some just-in-case sanity checks
 	bls.tab      = limit(prefs.tab, 0, 3)
@@ -441,7 +482,8 @@ static function InitialiseStructure(STRUCT BLstruct &bls)
 	bls.history  = prefs.history
 	bls.blSuff   = SelectString(strlen(prefs.blSuff)>0, "_BL", prefs.blSuff)
 	bls.subSuff  = SelectString(strlen(prefs.subSuff)>0, "_sub", prefs.subSuff)
-	bls.options  = prefs.options // see packagePrefs for details
+	bls.maskSuff  = SelectString(strlen(prefs.maskSuff)>0, "_mask", prefs.maskSuff)
+	bls.options  = prefs.options // see PackagePrefs stucture definition for details
 	bls.base     = prefs.base
 	bls.keyplus  = prefs.keyplus == 0 ? 43 : prefs.keyplus
 	bls.keyminus = prefs.keyminus == 0 ? 45 : prefs.keyminus
@@ -449,32 +491,50 @@ static function InitialiseStructure(STRUCT BLstruct &bls)
 	SetFitFunc(bls) // sets bls.fitfunc
 end
 
-// returns version number as integer, 100 = 1.00
-static function GetProcVersion(string win)
-	int noversion = 0 // default value when no version is found
-	if (strlen(win) == 0)
-		string strStack = GetRTStackInfo(3)
-		win = StringFromList(ItemsInList(strStack, ",") - 2, strStack, ",")
-		string IM = " [" + GetIndependentModuleName() + "]"
+// ProcedureVersion("") doesn't work for independent modules!
+// extract procedure version from this file
+static function GetThisVersion()
+
+	variable procVersion
+	// try the quick way
+	#if exists("ProcedureVersion") == 3
+	procVersion = ProcedureVersion("")
+	if (procVersion)
+		return 100 * procVersion
 	endif
-	wave /T ProcText = ListToTextWave(ProcedureText("", 0, win + IM), "\r")
-	variable versionVar
+	#endif
+	
+	int maxLines = 20 // number of lines to search for version pragma
+	int refNum, i
+	string strHeader = ""
+	string strLine = ""
+	
+	Open /R/Z refnum as FunctionPath("")
+	if (refnum == 0)
+		return 0
+	endif
+	for (i=0;i<maxLines;i+=1)
+		FReadLine refNum, strLine
+		strHeader += strLine
+	endfor
+	Close refnum
+	wave/T ProcText = ListToTextWave(strHeader, "\r")
 	Grep /Q/E="(?i)^#pragma[\s]*version[\s]*=" /LIST/Z ProcText
-	s_value = LowerStr(TrimString(s_value, 1))
-	sscanf s_value, "#pragma version = %f", versionVar
-	if (V_flag!=1 || versionVar<=0)
-		return noversion
+	if (v_flag != 0)
+		return 0
 	endif
-	versionVar *= 100
-	int version = versionVar
-	return version
+	s_value = LowerStr(TrimString(s_value, 1))
+	sscanf s_value, "#pragma version = %f", procVersion
+	ProcVersion = (V_flag!=1 || ProcVersion<=0) ? 0 : ProcVersion
+
+	return 100 * ProcVersion
 end
 
 static function ResetPrefs()
 	STRUCT PackagePrefs prefs
-	LoadPackagePreferences /MIS=1 ksPackageName, ksPrefsFileName, 0, prefs
+	LoadPackagePreferences/MIS=1 ksPackageName, ksPrefsFileName, 0, prefs
 	PrefsSetDefaults(prefs)
-	SavePackagePreferences /KILL ksPackageName, ksPrefsFileName, 0, prefs
+	SavePackagePreferences/KILL ksPackageName, ksPrefsFileName, 0, prefs
 end
 
 static function MakePrefsPanel(STRUCT WMButtonAction &s)
@@ -483,7 +543,7 @@ static function MakePrefsPanel(STRUCT WMButtonAction &s)
 		return 0
 	endif
 		
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
 
@@ -494,16 +554,16 @@ static function MakePrefsPanel(STRUCT WMButtonAction &s)
 	STRUCT PackagePrefs prefs
 	PrefsLoad(prefs)
 	
-	KillWindow /Z BaselinesPrefsPanel
+	KillWindow/Z BaselinesPrefsPanel
 	
 	variable WL = 150, WT = 100, height = 295, width = 422 // window coordinates
-	GetWindow /Z $s.win wsizeRM
+	GetWindow/Z $s.win wsizeRM
 	if (v_flag == 0)
 		WL = V_left + 50; WT = V_top
 	endif
 	
-	NewPanel /K=1/N=BaselinesPrefsPanel/W=(WL,WT,WL+width,WT+height) as "Baseline Settings [version " + num2str(GetProcVersion("")/100) +"]"
-	ModifyPanel /W=BaselinesPrefsPanel, fixedSize=1, noEdit=1
+	NewPanel/K=1/N=BaselinesPrefsPanel/W=(WL,WT,WL+width,WT+height) as "Baseline Settings [version " + num2str(GetThisVersion()/100) +"]"
+	ModifyPanel/W=BaselinesPrefsPanel, fixedSize=1, noEdit=1
 	
 	variable top = 5, vL = 25, vL2 = 230, font = 12, groupw = 200
 	
@@ -520,7 +580,7 @@ static function MakePrefsPanel(STRUCT WMButtonAction &s)
 	SetVariable svBase, help={"Set to desired baseline reference value"}, fSize=font
 	
 	//top=155
-	GroupBox groupSub, pos={vL2-15,top}, size={groupw,205}, title="Baseline Subtraction", fSize=font
+	GroupBox groupSub, pos={vL2-15,top}, size={groupw,245}, title="Baseline Subtraction", fSize=font
 	CheckBox chkAppendSub, pos={vL2, top+20}, fSize=font, title="Append Subtracted"
 	CheckBox chkAppendSub, help={"Add baseline-subtracted wave to plot after subtraction"}
 	CheckBox chkAppendBL, pos={vL2, top+40}, fSize=font, title="Append Baseline"
@@ -528,18 +588,25 @@ static function MakePrefsPanel(STRUCT WMButtonAction &s)
 	CheckBox chkRemOrig, pos={vL2, top+60}, fSize=font, title="Remove Original"
 	CheckBox chkRemOrig, help={"Remove trace from graph after subtracting baseline"}
 	CheckBox chkOverwrite, pos={vL2, top+80}, fSize=font, title="Overwrite Without Warning"
-	CheckBox chkOverwrite, help={"Overwrite baseline, baseline-subtracted and nodes waves without warning"}
+	CheckBox chkOverwrite, help={"Overwrite baseline, baseline-subtracted, mask, and nodes waves without warning"}
 	CheckBox chkParams, pos={vL2, top+100}, fSize=font, title="Record Settings in History"
 	CheckBox chkParams, help={"Print baseline parameters after subtracting"}
 	
 	TitleBox txt2, title="Output Data Folder:", pos={vL2, top+120}, fSize=font, frame=0
 	CheckBox chkCurrentDF, pos={vL2, top+140}, title="Current", mode=1, fSize=font, Proc=baselines#BaselineCheckboxes
 	CheckBox chkSourceDF, pos={vL2+65, top+140}, title="Same as Source", mode=1, fSize=font, Proc=baselines#BaselineCheckboxes
+	CheckBox chkSubfolders, pos={vL2, top+160}, title="Save Waves in Subfolders", mode=0, fSize=font
+	CheckBox chkSubfolders, help={"Save output waves in separate subfolder for each baseline type"}
 	
-	SetVariable svBLsuff, pos={vL2,top+160}, size={165,16}, title="Baseline Suffix", Proc=baselines#BaselineSetvars
+	SetVariable svBLsuff, pos={vL2,top+180}, size={165,16}, title="Baseline Suffix", Proc=baselines#BaselineSetvars
 	SetVariable svBLsuff, help={"Baseline suffix is appended to output baseline wave names"}, fSize=font, bodyWidth=60
-	SetVariable svSubSuff, pos={vL2,top+180}, size={165,16}, title="Subtracted Suffix", Proc=baselines#BaselineSetvars
+	SetVariable svSubSuff, pos={vL2,top+200}, size={165,16}, title="Subtracted Suffix", Proc=baselines#BaselineSetvars
 	SetVariable svSubSuff, help={"Subtracted suffix is appended to output baseline-subtracted wave names"}, fSize=font, bodyWidth=60
+	
+	CheckBox chkMask, pos={vL2, top+220}, title="Save Mask:", fSize=font
+	CheckBox chkMask, help={"Save a copy of mask wave"}
+	SetVariable svMaskSuff, pos={vL2,top+220}, size={165,16}, title="", Proc=baselines#BaselineSetvars
+	SetVariable svMaskSuff, help={"Mask suffix is appended to output mask wave names"}, fSize=font, bodyWidth=60
 	
 	top = 115
 	GroupBox groupMask, pos={vL-15,top}, size={groupw,70}, title="Mask Settings", fSize=font
@@ -576,7 +643,7 @@ static function PrefsButtonProc(STRUCT WMButtonAction &s)
 	endif
 	
 	STRUCT BLstruct bls
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	StructGet bls dfr:w_struct
 	
 	if (CheckUpdated(bls, 1))
@@ -585,7 +652,7 @@ static function PrefsButtonProc(STRUCT WMButtonAction &s)
 	
 	strswitch(s.ctrlName)
 		case "btnCancel" :
-			DoWindow /K $s.win
+			DoWindow/K $s.win
 			break
 		case "btnSave" :
 			
@@ -608,16 +675,16 @@ static function PrefsButtonProc(STRUCT WMButtonAction &s)
 			StructPut bls dfr:w_struct
 			PrefsSave(bls)
 			DoFit(bls)
-			DoWindow /K $s.win
+			DoWindow/K $s.win
 			break
 		case "btnDefaults" :
-			bls.base    = 0
-			bls.history = 1
-			bls.options = 1
-			bls.blSuff  = "_BL"
-			bls.subSuff = "_sub"
-			bls.nodes   = 5
-			bls.keyplus = 43
+			bls.base     = 0
+			bls.history  = 1
+			bls.options  = 1
+			bls.blSuff   = "_BL"
+			bls.subSuff  = "_sub"
+			bls.nodes    = 5
+			bls.keyplus  = 43
 			bls.keyminus = 45
 			
 			SetControlValuesFromPrefs(bls)
@@ -630,42 +697,48 @@ static function GetPrefsControlValues(STRUCT BLstruct &bls)
 		
 	int options, history
 	int oldOptions = bls.options
-	ControlInfo /W=BaselinesPrefsPanel chkAppendSub
+	ControlInfo/W=BaselinesPrefsPanel chkAppendSub
 	options += 1 * v_value
-	ControlInfo /W=BaselinesPrefsPanel chkAppendBL
+	ControlInfo/W=BaselinesPrefsPanel chkAppendBL
 	options += 2 * v_value
-	ControlInfo /W=BaselinesPrefsPanel chkRemOrig
+	ControlInfo/W=BaselinesPrefsPanel chkRemOrig
 	options += 4 * v_value
-	ControlInfo /W=BaselinesPrefsPanel chkNeg
+	ControlInfo/W=BaselinesPrefsPanel chkNeg
 	options += 8 * v_value
-	ControlInfo /W=BaselinesPrefsPanel chkNodesOnTrace
+	ControlInfo/W=BaselinesPrefsPanel chkNodesOnTrace
 	options += 16 * v_value
-	ControlInfo /W=BaselinesPrefsPanel chkColor
+	ControlInfo/W=BaselinesPrefsPanel chkColor
 	options += 32 * (!v_value)
-	ControlInfo /W=BaselinesPrefsPanel chkLHS
+	ControlInfo/W=BaselinesPrefsPanel chkLHS
 	options += 64 * v_value
-	ControlInfo /W=BaselinesPrefsPanel chkOverwrite
+	ControlInfo/W=BaselinesPrefsPanel chkOverwrite
 	options += 128 * v_value
-	ControlInfo /W=BaselinesPrefsPanel chkCurrentDF
+	ControlInfo/W=BaselinesPrefsPanel chkCurrentDF
 	options += 256 * v_value
+	ControlInfo/W=BaselinesPrefsPanel chkMask
+	options += 512 * v_value
+	ControlInfo/W=BaselinesPrefsPanel chkSubfolders
+	options += 1024 * v_value
 	bls.options = options
 			
-	ControlInfo /W=BaselinesPrefsPanel svBase
+	ControlInfo/W=BaselinesPrefsPanel svBase
 	bls.base = v_value
-	ControlInfo /W=BaselinesPrefsPanel svBLsuff
+	ControlInfo/W=BaselinesPrefsPanel svBLsuff
 	bls.blsuff = s_value
-	ControlInfo /W=BaselinesPrefsPanel svSubSuff
+	ControlInfo/W=BaselinesPrefsPanel svSubSuff
 	bls.subsuff = s_value
-	ControlInfo /W=BaselinesPrefsPanel svNodes
+	ControlInfo/W=BaselinesPrefsPanel svMaskSuff
+	bls.masksuff = s_value
+	ControlInfo/W=BaselinesPrefsPanel svNodes
 	bls.nodes = v_value
-	ControlInfo /W=BaselinesPrefsPanel svKeyplus
+	ControlInfo/W=BaselinesPrefsPanel svKeyplus
 	bls.keyplus = char2num(s_value)
-	ControlInfo /W=BaselinesPrefsPanel svKeyminus
+	ControlInfo/W=BaselinesPrefsPanel svKeyminus
 	bls.keyminus = char2num(s_value)
 	
-	ControlInfo /W=BaselinesPrefsPanel chkParams
+	ControlInfo/W=BaselinesPrefsPanel chkParams
 	history = v_value
-	ControlInfo /W=BaselinesPrefsPanel chkRegions
+	ControlInfo/W=BaselinesPrefsPanel chkRegions
 	history += 2*v_value
 	bls.history = history
 	
@@ -687,9 +760,12 @@ static function SetControlValuesFromPrefs(STRUCT BLstruct &bls)
 	CheckBox chkOverwrite, win=BaselinesPrefsPanel, value = (bls.options&0x80)
 	CheckBox chkCurrentDF, win=BaselinesPrefsPanel, value = bls.options&0x100
 	CheckBox chkSourceDF, win=BaselinesPrefsPanel, value = !(bls.options&0x100)
-		
+	CheckBox chkMask, win=BaselinesPrefsPanel, value = bls.options&0x200
+	CheckBox chkSubfolders, win=BaselinesPrefsPanel, value = bls.options&0x400
+
 	SetVariable svBLsuff, win=BaselinesPrefsPanel, value=_STR:bls.blsuff
 	SetVariable svSubSuff, win=BaselinesPrefsPanel, value=_STR:bls.subsuff
+	SetVariable svMaskSuff, win=BaselinesPrefsPanel, value=_STR:bls.masksuff
 	SetVariable svBase, win=BaselinesPrefsPanel, value=_NUM:bls.base
 	SetVariable svNodes, win=BaselinesPrefsPanel, value=_NUM:bls.nodes
 	
@@ -702,19 +778,19 @@ end
 
 static function SetTraceProperties(STRUCT BLstruct &bls)
 	// be careful because bls.trace = "" will be interpreted as top trace!
-	wave /Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
 	if (strlen(bls.trace)==0 || WaveExists(w_data) == 0)
 		bls.datalength = 0
 		return 0
 	endif
 	bls.datalength = DimSize(w_data, 0)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 	bls.XY = WaveExists(w_x)
 	if (bls.XY)
 		// check for monotonic X wave
-		Make /free w_diff
+		Make/free w_diff
 		Differentiate w_x /D=w_diff
-		WaveStats /Q/M=0 w_diff
+		WaveStats/Q/M=0 w_diff
 		if (V_max>0 && V_min<0)
 			bls.datalength = 0
 		endif
@@ -729,31 +805,31 @@ end
 static function SetFitFunc(STRUCT BLstruct &bls)
 	switch (bls.tab)
 		case 0:
-			bls.fitfunc = StringFromList(bls.type[bls.tab], ksMaskedTypes + UserFitName())
+			bls.fitfunc = StringFromList(bls.type[bls.tab], ksMaskedTypes + GetListOfUserFuncs())
 			break
 		case 1:
 			bls.fitfunc = StringFromList(bls.type[bls.tab], ksManTypes)
 			break
 		case 2:
-			bls.fitfunc = StringFromList(bls.type[bls.tab], ksAutoTypes + UserFitName())
+			bls.fitfunc = StringFromList(bls.type[bls.tab], ksAutoTypes + GetListOfUserFuncs())
 			break
 		case 3:
 			bls.fitfunc = StringFromList(bls.type[bls.tab], ksSplineTypes)
 			break
-	endswitch	
+	endswitch
 	return 1
 end
 
-static function QuitBaselines(STRUCT BLstruct &bls)		
-	KillWindow /Z $bls.graph + "#BL_panel"
-	KillWindow /Z BaselinesPrefsPanel		
+static function QuitBaselines(STRUCT BLstruct &bls)
+	KillWindow/Z $bls.graph + "#BL_panel"
+	KillWindow/Z BaselinesPrefsPanel
 	PrefsSave(bls)
 	ClearGraph(bls, 0)
-	KillDataFolder /Z GetDFREF()
+	KillDataFolder/Z GetPackageDFREF()
 	return 0
 end
 
-static function/DF GetDFREF()
+static function/DF GetPackageDFREF()
 	DFREF dfr = root:Packages:Baselines
 	if (DataFolderRefStatus(dfr) != 1 || WaveExists(dfr:w_struct)==0)
 		DFREF dfr = CreatePackageFolder()
@@ -761,28 +837,32 @@ static function/DF GetDFREF()
 	return dfr
 end
 
-static function /DF CreatePackageFolder()
-	NewDataFolder /O root:Packages
-	NewDataFolder /O root:Packages:Baselines
+static function/DF CreatePackageFolder()
+	NewDataFolder/O root:Packages
+	NewDataFolder/O root:Packages:Baselines
 	DFREF dfr = root:Packages:Baselines
 	STRUCT BLstruct bls
 	InitialiseStructure(bls)
-	Make /O/N=0 dfr:w_struct /wave=w_struct
+	Make/O/N=0 dfr:w_struct /wave=w_struct
 	StructPut bls w_struct
-	Make /O/N=(0,2) dfr:w_regions
-	Make /O/N=0 dfr:w_display
-	Make /O/N=0/D dfr:w_nodesX, dfr:w_nodesY
-	Make /O/N=1 dfr:w_spline_dependency /wave=w_spline_dependency
+	Make/O/N=(0,2) dfr:w_regions
+	Make/O/N=0 dfr:w_display
+	Make/O/N=0/D dfr:w_nodesX, dfr:w_nodesY
+	Make/O/N=1 dfr:w_spline_dependency /wave=w_spline_dependency
 	// set a dependency to trigger interpolation and update graph when we
 	// adjust a node position
 	w_spline_dependency := baselines#DoSplineFit(root:Packages:Baselines:w_nodesY)
-	Make /O/N=0/T dfr:w_traces
-	Make /O/I/U/N=(0,3) dfr:w_colors
+	Make/O/N=0/T dfr:w_traces
+	Make/O/I/U/N=(0,3) dfr:w_colors
+	Make/O/N=2 dfr:dummy /wave=dummy
+	SetScale/I x, 1, 100, dummy
+	dummy = {1, 100}
+	Make/O/N=0 dfr:w_mask
 	return dfr
 end
  
-static function/s MarqueeMenuString(string str)
-	wave /Z w_struct = root:Packages:Baselines:w_struct
+static function/S MarqueeMenuString(string str)
+	wave/Z w_struct = root:Packages:Baselines:w_struct
 	if (WaveExists(w_struct) == 0) // not initialised
 		return ""
 	endif
@@ -792,8 +872,8 @@ static function/s MarqueeMenuString(string str)
 		return ""
 	endif
 			
-	DFREF dfr = GetDFREF()
-	wave /Z/SDFR=dfr w_regions
+	DFREF dfr = GetPackageDFREF()
+	wave/Z/SDFR=dfr w_regions
 		
 	if (DimSize(w_regions, 0)==0 && cmpstr(str[0,2], "Add"))
 		return ""
@@ -802,16 +882,16 @@ static function/s MarqueeMenuString(string str)
  	return str
 end
 
-static function Initialise([string graph, int tab, int type, string trace])
-	DFREF dfr = GetDFREF()
+static function Initialise([string Graph, int tab, int type, string trace])
+	DFREF dfr = GetPackageDFREF()
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
 	
 	// clear any package detritus from the last used baseline graph
 	ClearGraph(bls, 1) // may delete package folder
 	
-	if (paramisdefault(graph) == 0)
-		DoWindow /F $graph
+	if (ParamIsDefault(Graph) == 0)
+		DoWindow/F $Graph
 	endif
 	
 	if (WinType("") != 1) // not a graph
@@ -820,7 +900,7 @@ static function Initialise([string graph, int tab, int type, string trace])
 			MakeSpectrum(N=5)
 			DoUpdate
 		else
-			KillDataFolder /Z dfr
+			KillDataFolder/Z dfr
 			return 0
 		endif
 	endif
@@ -831,7 +911,7 @@ static function Initialise([string graph, int tab, int type, string trace])
 	
 	// make sure the top graph is visible
 	string graphStr = WinName(0,1)
-	DoWindow /F $graphStr
+	DoWindow/F $graphStr
 	bls.graph = graphStr
 		
 	if (ParamIsDefault(tab) == 0)
@@ -849,7 +929,7 @@ static function Initialise([string graph, int tab, int type, string trace])
 		bls.trace = trace
 	endif
 	
-	// when panel is made a hook function is set for graph window; 
+	// when panel is made a hook function is set for graph window;
 	// hook checks struct for matching window name!
 	StructPut bls dfr:w_struct
 		
@@ -866,7 +946,7 @@ static function Initialise([string graph, int tab, int type, string trace])
 end
 
 static function action(string str)
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
 	
@@ -899,23 +979,23 @@ static function MakePanel(STRUCT BLstruct &bls)
 	
 	// make sure there's space for the panel
 	// this could be smarter - deal with multiple screens, use igorinfo(0)
-	GetWindow /Z $bls.graph wsize
+	GetWindow/Z $bls.graph wsize
 	
 	variable panelW = 205, panelH = 350
 	if ((bls.options&0x40) && V_left < panelW)
-		MoveWindow /W=$bls.graph panelW, V_top, -1, -1
+		MoveWindow/W=$bls.graph panelW, V_top, -1, -1
 	endif
 	
 	string panelStr = bls.graph+"#BL_panel"
-	KillWindow /Z $panelStr
+	KillWindow/Z $panelStr
 	
 	// make panel
 	if (bls.options & 0x40)	// panel on left
-		NewPanel /K=1/N=BL_panel/W=(panelW,0,0,panelH)/HOST=$bls.graph/EXT=1 as "Baseline Controls"
+		NewPanel/K=1/N=BL_panel/W=(panelW,0,0,panelH)/HOST=$bls.graph/EXT=1 as "Baseline Controls"
 	else // panel on right
-		NewPanel /K=1/N=BL_panel/W=(0,0,panelW,panelH)/HOST=$bls.graph/EXT=0 as "Baseline Controls"
+		NewPanel/K=1/N=BL_panel/W=(0,0,panelW,panelH)/HOST=$bls.graph/EXT=0 as "Baseline Controls"
 	endif
-	ModifyPanel /W=$panelStr, noEdit=1
+	ModifyPanel/W=$panelStr, noEdit=1
 	
 	string traces = GetTraceList(bls)
 	if (strlen(traces) == 0)
@@ -949,17 +1029,25 @@ static function MakePanel(STRUCT BLstruct &bls)
 	// all tabs, controls within the 'baseline type' groupbox
 	top = 95
 	GroupBox groupType, win=$panelStr, pos={vL-15,top}, size={groupw,50}, title="Baseline type", fSize=font
-	PopupMenu popType, win=$panelStr, pos={vL,top+25}, size={130,20}, title="", fSize=font
+	PopupMenu popType, win=$panelStr, pos={vL,top+25}, size={100,20}, title="", fSize=font
 	PopupMenu popType, win=$panelStr, help={"Select baseline type" }, Proc=baselines#BaselinePopups
-	SetVariable svSD_tab0, win=$panelStr, pos={vL+40,top+25}, size={120,16}, title="SD", fSize=font, focusring=0
-	SetVariable svSD_tab0, win=$panelStr, limits={0,Inf,1}, value=_NUM:bls.sd, bodyWidth=60
-	SetVariable svSD_tab0, win=$panelStr, help={"Estimate of noise in masked region"}, Proc=baselines#BaselineSetvars
+	SetVariable svSD, win=$panelStr, pos={vL+40,top+25}, size={120,16}, title="SD", fSize=font, focusring=0
+	SetVariable svSD, win=$panelStr, limits={0,Inf,1}, value=_NUM:bls.sd, bodyWidth=60
+	SetVariable svSD, win=$panelStr, help={"Estimate of noise for smoothing spline"}, Proc=baselines#BaselineSetvars
 	SetVariable svCycles_tab1, win=$panelStr, pos={vL+65,top+25}, size={90,16}, title="Cycles", fSize=font, focusring=0
 	SetVariable svCycles_tab1, win=$panelStr, limits={0,1000,1}, value=_NUM:bls.cycles
 	SetVariable svCycles_tab1, win=$panelStr, help={"Select desired number of complete cycles between cursors"}, Proc=baselines#BaselineSetvars
 	SetVariable svDepth_tab2, win=$panelStr, pos={vL+95,top+25}, size={65,16}, title="", fSize=font, focusring=0
 	SetVariable svDepth_tab2, win=$panelStr, limits={-Inf,Inf,abs(bls.depth/10)+(bls.depth==0)}, value=_NUM:bls.depth
 	SetVariable svDepth_tab2, win=$panelStr, help={"Depth of arc"}, Proc=baselines#BaselineSetvars
+		
+	SetVariable svARSits_tab2, win=$panelStr, pos={vL+63,top+25}, size={50,16}, title="its", fSize=font, focusring=0
+	SetVariable svARSits_tab2, win=$panelStr, value=_NUM:bls.arsits, limits={1,100,0}
+	SetVariable svARSits_tab2, win=$panelStr, help={"iterations"}, Proc=baselines#BaselineSetvars
+	SetVariable svARSsd_tab2, win=$panelStr, pos={vL+115,top+25}, size={50,16}, title="sd", fSize=font, focusring=0
+	SetVariable svARSsd_tab2, win=$panelStr, value=_NUM:bls.arssd, limits={1,100,0}
+	SetVariable svARSsd_tab2, win=$panelStr, help={"SD for smoothing"}, Proc=baselines#BaselineSetvars
+	
 	SetVariable svF_tab3, win=$panelStr, pos={vL+105,top+25}, size={50,16}, title="", fSize=font, bodyWidth=50, focusring=0
 	SetVariable svF_tab3, win=$panelStr, value=_NUM:bls.flagF, limits={0,Inf,1}
 	SetVariable svF_tab3, win=$panelStr, help={"Smoothing factor"}, Proc=Baselines#BaselineSetvars
@@ -968,9 +1056,14 @@ static function MakePanel(STRUCT BLstruct &bls)
 	SetVariable svPoly, win=$panelStr, pos={vL+80,top+25}, size={80,16}, title="Order", fSize=font, focusring=0
 	SetVariable svPoly, win=$panelStr, value=_NUM:bls.polyorder // , limits={3,20,1}
 	SetVariable svPoly, win=$panelStr, help={"Polynomial order"}, Proc=baselines#BaselineSetvars
+	
 	// appears in tabs 0 and 2
 	CheckBox chkPeak, win=$panelStr, pos={vL+110,top+25}, title="Peak", fSize=font, Proc=Baselines#BaselineCheckboxes
 	CheckBox chkPeak, win=$panelStr, help={"Peak function with vertical offset y0 = 0"}, value=bls.peak
+	
+	// appears in tabs 0 and 2
+	PopupMenu popPlanck, win=$panelStr, pos={vL+90,top+25}, title="", fSize=font, Proc=baselines#BaselinePopups
+	PopupMenu popPlanck, win=$panelStr, help={"select wavelength units"}, mode=bls.wavelength, value="nm;μm;cm^-1;Å;"
 		
 	// tab 0, mask region group
 	top = 150
@@ -1003,7 +1096,12 @@ static function MakePanel(STRUCT BLstruct &bls)
 	CheckBox chkNeg_tab2, win=$panelStr, help={"Fit baseline to top of spectrum, also\raffects node positions for splines"}, value=bls.options&8
 	CheckBox chkHull_tab2, win=$panelStr, pos={vL,top+45}, title="Use convex hull at start", fSize=font, Proc=Baselines#BaselineCheckboxes
 	CheckBox chkHull_tab2, win=$panelStr, help={"Use convex hull for first iteration"}, value=bls.hull
-	
+	// define guides for ARS graph subwindow
+	DefineGuide/W=$panelStr gLeft={FL,5}
+	DefineGuide/W=$panelStr gRight={FR,-5}
+	DefineGuide/W=$panelStr gTop={FT,150}
+	DefineGuide/W=$panelStr gBottom={FB,-90}
+		
 	// tab 3, spline, nodes group
 	top = 150
 	GroupBox groupNodes_tab3, win=$panelStr, pos={vL-15,top}, size={groupw,100}, title="Node control", fSize=font
@@ -1050,7 +1148,7 @@ static function MakePanel(STRUCT BLstruct &bls)
 	#if (IgorVersion() >= 9)
 	Button btnEdit_graph, win=$bls.Graph, labelBack=(0xFFFF,0xFFFF,0xFFFF,0)
 	#endif
-	ModifyGraph /W=$bls.graph axisOnTop=1
+	ModifyGraph/W=$bls.graph axisOnTop=1
 	ClearMarquee(bls)
 	
 	SetWindow $bls.graph hook(hBaselines)=baselines#hookBaselines
@@ -1063,26 +1161,26 @@ end
 // create fit waves and add to plot
 static function ResetGraphForTrace(STRUCT BLstruct &bls)
 		
-	RemoveFromGraph /W=$bls.graph /Z w_display, w_base, w_sub, tangent0, tangent1, w_nodesY
+	RemoveFromGraph/W=$bls.graph/Z w_display, w_base, w_sub, tangent0, tangent1, w_nodesY
 	if (bls.datalength == 0)
 		return 0
 	endif
 		
-	wave /Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 				
 	ResetColors(bls, 1) // set all to grey
 	RestoreTraceColor(bls)
 	
-	DFREF dfr=GetDFREF()
+	DFREF dfr=GetPackageDFREF()
 		
 	// plot the baseline...
-	Duplicate /O w_data dfr:w_base /WAVE=w_base
+	Duplicate/O w_data dfr:w_base /WAVE=w_base
 	FastOp w_base = (NaN)
 	AppendToSameAxes(bls.graph, bls.trace, w_base, w_x, matchOffset=1, unique=1)
 	
 	// ... and the baseline-subtracted result
-	Duplicate /O w_data dfr:w_sub /WAVE=w_sub
+	Duplicate/O w_data dfr:w_sub /WAVE=w_sub
 	FastOp w_sub = (NaN)
 	AppendToSameAxes(bls.graph, bls.trace, w_sub, w_x, unique=1)
 	
@@ -1092,7 +1190,7 @@ static function ResetGraphForTrace(STRUCT BLstruct &bls)
 	switch (bls.tab)
 		case 0 : // masked fit: plot masked regions
 			MaskResetWave(bls)
-			wave /SDFR=dfr w_display
+			wave/SDFR=dfr w_display
 			AppendToSameAxes(bls.graph, bls.trace, w_display, $"", w_RGB={0xD5A5,0xDE87,0xFFFF}, unique=1, fill=0.5, offset=-1e9)
 			ResetTangentWaves(bls)
 			
@@ -1109,6 +1207,10 @@ static function ResetGraphForTrace(STRUCT BLstruct &bls)
 			if (!bls.multi)
 				ResetDepth(bls) // estimate depth parameter for arc hull baseline
 			endif
+			
+			if (!bls.multi && cmpstr(bls.fitfunc, "spline")==0 && bls.datalength) // smoothing spline - make a guess for SD
+				ResetSD(bls)
+			endif
 			break
 		case 3 : // spline, plot nodes
 			if (bls.XY  && !isMonotonic(w_x))
@@ -1119,15 +1221,15 @@ static function ResetGraphForTrace(STRUCT BLstruct &bls)
 			break
 	endswitch
 	
-	ModifyGraph /W=$bls.graph live(w_base)=2
-	ModifyGraph /W=$bls.graph live(w_sub)=2
+	ModifyGraph/W=$bls.graph live(w_base)=2
+	ModifyGraph/W=$bls.graph live(w_sub)=2
 end
 
 // check for monotonic X wave
 static function isMonotonic(wave w_x)
-	Make /free w_diff
+	Make/free w_diff
 	Differentiate w_x /D=w_diff
-	WaveStats /Q/M=0 w_diff
+	WaveStats/Q/M=0 w_diff
 	return !(V_max>0 && V_min<0)
 end
 
@@ -1136,41 +1238,41 @@ static function ResetDepth(STRUCT BLstruct &bls)
 	if (bls.datalength == 0)
 		return 0
 	endif
-	wave /Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
 	int p1 = 0, p2 = numpnts(w_data) - 1
 	if (bls.subrange)
 		p1 = bls.endp[0]
 		p2 = bls.endp[1]
 	endif
-	WaveStats /Q/M=1/R=[p1,p2] w_data
+	WaveStats/Q/M=1/R=[p1,p2] w_data
 	bls.depth = (v_max - v_min) * (bls.options & 8 ? -0.15 : 0.15)
 	SetVariable svDepth_tab2, win=$bls.graph+"#BL_panel", limits={-Inf,Inf,abs(bls.depth/10)}, value=_NUM:bls.depth
 end
 
 static function MaskResetWave(STRUCT BLstruct &bls)
-	DFREF dfr = GetDFREF()
-	wave /Z/SDFR=dfr w_display, w_regions
+	DFREF dfr = GetPackageDFREF()
+	wave/Z/SDFR=dfr w_display, w_regions
 	
-	wave /Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 	if (bls.datalength==0 || WaveExists(w_data)==0)
 		return 0
 	endif
 	
-	Duplicate /O w_data dfr:w_mask /WAVE=w_mask
+	Duplicate/O w_data dfr:w_mask /WAVE=w_mask
 	FastOp w_mask = 0
-	Redimension /N=(0,2) w_display
+	Redimension/N=(0,2) w_display
 	
 	int numRegions = DimSize(w_regions, 0)
 	if (numRegions)
-		Make /free/N=(numRegions) dummy
+		Make/free/N=(numRegions) dummy
 		dummy = MaskSetRegion(w_regions[p][0], w_regions[p][1], w_mask, w_display, w_data, w_x)
 	endif
 end
 
 static function MaskAddOrRemoveSelection(int add)
 	
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
 			
@@ -1189,7 +1291,7 @@ end
 // when regions are adjusted, the mask and display waves are cleared and
 // for each region this function sets a region for display and mask.
 // called from MaskResetWave() in an implicit loop.
-static function MaskSetRegion(variable x1, variable x2, wave w_mask, wave w_display, wave w_data, wave /Z w_x)
+static function MaskSetRegion(variable x1, variable x2, wave w_mask, wave w_display, wave w_data, wave/Z w_x)
 	variable pLow, pHigh, pLeft, pRight
 	variable xlow = x1, xhigh = x2
 	if (WaveExists(w_x))
@@ -1217,17 +1319,17 @@ end
 // for x2 > x1
 static function MaskAddRegion(variable x1, variable x2, wave regions)
 	regions[DimSize(regions, 0)][] = {{x1},{x2}}
-	SortColumns /KNDX={0,1} sortwaves={regions}
+	SortColumns/KNDX={0,1} sortwaves={regions}
 	int i, numP
 
 	for (i=DimSize(regions,0)-1;i>0;i-=numP)
 		numP = 1
-		WaveStats /Q/RMD=[0,i-1][1,1]/M=1 regions
+		WaveStats/Q/RMD=[0,i-1][1,1]/M=1 regions
 		if (V_max >= regions[i][0]) // join overlapping regions
 			regions[V_maxRowLoc][1] = max(regions[V_maxRowLoc][1], regions[i][1])
 			numP = i - V_maxRowLoc
-			DeletePoints /M=0 V_maxRowLoc+1, numP, regions
-		endif	
+			DeletePoints/M=0 V_maxRowLoc+1, numP, regions
+		endif
 	endfor
 	return 1
 end
@@ -1239,9 +1341,9 @@ static function MaskRemoveRegion(variable x1, variable x2, wave regions)
 		if (x2 < regions[i][0] || x1 > regions[i][1])
 			continue
 		elseif (x1 <= regions[i][0] && x2 >= regions[i][1])
-			DeletePoints /M=0 i, 1, regions
+			DeletePoints/M=0 i, 1, regions
 		elseif (x1 > regions[i][0] && x2 < regions[i][1])
-			InsertPoints /M=0 i+1, 1, regions
+			InsertPoints/M=0 i+1, 1, regions
 			regions[i+1][1] = regions[i][1]
 			regions[i+1][0] = x2
 			regions[i][1] = x1
@@ -1257,10 +1359,10 @@ end
 // value = 1 to include, 0 to exclude.
 // can be used from commandline.
 function SetBaselineRegion(variable x1, variable x2, int value)
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
-	wave /Z/SDFR=dfr w_regions
+	wave/Z/SDFR=dfr w_regions
 	if (value)
 		MaskAddRegion(min(x1, x2), max(x1, x2), w_regions)
 	else
@@ -1279,7 +1381,7 @@ static function BaselineCheckboxes(STRUCT WMCheckboxAction &s)
 		return 0
 	endif
 	
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
 	
@@ -1357,22 +1459,22 @@ static function BaselineButtons(STRUCT WMButtonAction &s)
 		variable dx, dy
 		Button $s.ctrlName win=$s.win, userdata=""
 		do
-			GetMouse /W=$s.win
+			GetMouse/W=$s.win
 			buttondown = V_flag & 1
 			dx = (v_left - s.mouseLoc.h)
 			dy = (v_top - s.mouseLoc.v)
-			if (buttondown && (dx || dy))				
+			if (buttondown && (dx || dy))
 				if (moved == 1)
 					moved = 2 // more than one move, assume movement is intentional
 					Button $s.ctrlName win=$s.win, userdata="moved"
-				endif			
+				endif
 				if (!moved)
 					moved = 1 // first move - may not be intentional
 				endif
 				s.mouseLoc.h = v_left
 				s.mouseLoc.v = v_top
 				Button btnEdit_graph, win=$s.win, pos+={dx,dy}
-				DoUpdate /W=$s.win
+				DoUpdate/W=$s.win
 			endif
 		while (buttondown)
 		return 0
@@ -1382,7 +1484,7 @@ static function BaselineButtons(STRUCT WMButtonAction &s)
 		return 0
 	endif
 	
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
 	
@@ -1411,7 +1513,7 @@ static function BaselineButtons(STRUCT WMButtonAction &s)
 			FitAll(bls)
 			break
 		case "btnClear_tab0" :
-			SetBaselineRegion(-Inf, Inf, 0)			
+			SetBaselineRegion(-Inf, Inf, 0)
 			break
 		case "btnAdd_graph" :
 		case "btnRemove_graph" :
@@ -1438,16 +1540,16 @@ static function BaselineButtons(STRUCT WMButtonAction &s)
 			endif
 			break
 		case "btnDone" :
-			KillWindow /Z $s.win
+			KillWindow/Z $s.win
 			// just to make sure
 			PrefsSave(bls)
 			ClearGraph(bls, 0)
-			KillDataFolder /Z GetDFREF()
+			KillDataFolder/Z GetPackageDFREF()
 			return 0
 			break
 		case "btnHelp" :
-			OpenHelp /INT=0/Z ParseFilePath(1, FunctionPath(""), ":", 1, 0) + "Baselines Help.ihf"
-			DisplayHelpTopic /K=1/Z "How to use Baselines for Igor Pro"
+			OpenHelp/INT=0/Z ParseFilePath(1, FunctionPath(""), ":", 1, 0) + "Baselines Help.ihf"
+			DisplayHelpTopic/K=1/Z "How to use Baselines for Igor Pro"
 			break
 	endswitch
 	
@@ -1456,14 +1558,43 @@ static function BaselineButtons(STRUCT WMButtonAction &s)
 end
 
 static function BaselineSetvars(STRUCT WMSetVariableAction &s)
-
+	
+	STRUCT BLstruct bls
+	
 	switch (s.eventCode)
+		#if IgorVersion() >= 9
+		case 9 : // mousedown, Igor 9+
+			if (s.mousepart == 1 || s.mousepart == 2)
+				variable increment = 10 / 100 * abs(s.dval) // default: set increment to 10% of value
+				if (s.eventmod & 2) // shift -> 30%
+					increment = 30 / 100 * abs(s.dval)
+				elseif (s.eventmod & 4) // option/alt -> 5%
+					increment = 5 / 100 * abs(s.dval)
+				endif
+				increment = increment == 0 ? 1 : increment
+				
+				if (cmpstr(s.ctrlName, "svSD") == 0)
+					SetVariable $s.ctrlName win=$s.win, limits={0, Inf, increment}
+				elseif (cmpstr(s.ctrlName, "svDepth_tab2") == 0)
+					SetVariable $s.ctrlName win=$s.win, limits={-Inf, Inf, increment}
+				endif
+			endif
+			break
+		#endif
+		case 7: // begin edit
+			if (cmpstr((s.ctrlName)[0,4], "svARS")==0) // svARSits_tab2 or svARSsd_tab2
+				wave/SDFR=GetPackageDFREF() w_struct
+				StructGet bls w_struct
+				if (CheckUpdated(bls, 1))
+					return 0
+				endif
+				ShowARSgraph(bls, 1)
+			endif
+			break
 		case 8 : // update
 		case 1 : // mouseup
-			wave /SDFR=GetDFREF() w_struct
-			STRUCT BLstruct bls
+			wave/SDFR=GetPackageDFREF() w_struct
 			StructGet bls w_struct
-
 			if (CheckUpdated(bls, 1))
 				return 0
 			endif
@@ -1482,9 +1613,11 @@ static function BaselineSetvars(STRUCT WMSetVariableAction &s)
 					endif
 					DoFit(bls)
 					break
-				case "svSD_tab0" :
-					// reset increment value to 10% of current value
-					SetVariable svSD_tab0 win=$s.win,limits={0, Inf, s.dval==0 ? 1 : abs(s.dval/10)}
+				case "svSD" :
+					#if IgorVersion() < 9
+					SetvarPercentageIncrement(s, 10, 5, 30) // resets control value and s.dval
+					SetVariable $s.ctrlName win=$s.win, userdata=num2str(s.dval) // keep track of value, however it is changed
+					#endif
 					bls.sd = s.dval
 					DoFit(bls)
 					break
@@ -1503,8 +1636,11 @@ static function BaselineSetvars(STRUCT WMSetVariableAction &s)
 					MarqueeSetAtSetvarValues(bls) // set marquee in host window
 					break
 				case "svDepth_tab2" :
+					#if IgorVersion() < 9
+					SetvarPercentageIncrement(s, 10, 5, 30) // resets control value and s.dval
+					SetVariable $s.ctrlName win=$s.win, userdata=num2str(s.dval)
+					#endif
 					bls.depth = s.dval
-					SetVariable $s.ctrlName win=$s.win,limits={-Inf, Inf, s.dval==0 ? 1 : abs(s.dval/10)}
 					DoFit(bls)
 					break
 				case "svSmooth_tab2" :
@@ -1512,15 +1648,27 @@ static function BaselineSetvars(STRUCT WMSetVariableAction &s)
 					SetVariable $s.ctrlName win=$s.win,value=_NUM:bls.smoothing // set to integer value
 					DoFit(bls)
 					break
+				case "svARSits_tab2" :
+				case "svARSsd_tab2" :
+					if (cmpstr(s.ctrlName, "svARSits_tab2") == 0)
+						bls.arsits = s.dval
+					else
+						bls.arssd = s.dval
+					endif
+					if (WinType(s.win+"#g0") == 1) // just in case
+						Cursor/N=1/F/H=1/W=$s.win+"#g0" A dummy bls.arsits, bls.arssd
+					endif
+					DoFit(bls)
+					break
 				case "svL" :
 					bls.csr.C.x = s.dval
-					Cursor /F/W=$bls.graph/N=1 C $bls.trace bls.csr.C.x, 0
+					Cursor/F/W=$bls.graph/N=1 C $bls.trace bls.csr.C.x, 0
 					GetPointsFromCursors(bls)
 					DoFit(bls)
 					break
 				case "svR" :
 					bls.csr.D.x = s.dval
-					Cursor /F/W=$bls.graph/N=1 D $bls.trace bls.csr.D.x, 0
+					Cursor/F/W=$bls.graph/N=1 D $bls.trace bls.csr.D.x, 0
 					GetPointsFromCursors(bls)
 					DoFit(bls)
 					break
@@ -1542,7 +1690,7 @@ static function BaselineSetvars(STRUCT WMSetVariableAction &s)
 					if (strlen(s.sval)!=1) // don't allow an empty string value
 						SetVariable $s.ctrlName, win=$s.win, value=_STR:"+"
 					endif
-					break	
+					break
 				case "svKeyminus" :
 					if (strlen(s.sval)!=1) // don't allow an empty string value
 						SetVariable $s.ctrlName, win=$s.win, value=_STR:"-"
@@ -1556,13 +1704,119 @@ static function BaselineSetvars(STRUCT WMSetVariableAction &s)
 	return 0
 end
 
+// for Igor versions older than 9
+static function SetvarPercentageIncrement(STRUCT WMSetVariableAction &s, variable normal, variable option, variable shift)
+	if (s.eventCode != 1)
+		return 0
+	endif
+	
+	variable pc = normal
+	if (s.eventmod & 4)
+		pc = option
+	elseif (s.eventmod & 2)
+		pc = shift
+	endif
+
+	variable oldValue = str2num(s.userdata)
+	oldValue = numtype(oldValue) == 0 ? oldValue : 1
+	
+	variable direction = 1 - 2 * (s.dval < oldValue)
+	variable newValue = oldValue + direction * pc / 100 * abs(oldValue != 0 ? oldValue : s.dval - oldValue)
+	
+	SetVariable $s.ctrlName, win=$s.win, value=_NUM:newValue
+	s.dval = newValue
+	return 0
+end
+
+static function MakeARSgraph(STRUCT BLstruct &bls)
+	
+	wave/SDFR=GetPackageDFREF() dummy
+	
+	string panelStr = bls.graph + "#BL_panel"
+	string graphStr = panelStr + "#g0"
+	
+	KillWindow/Z $graphStr
+	Display/HOST=$panelStr/FG=(gLeft, gTop, gRight, gBottom)/N=g0 dummy
+	ModifyGraph/W=$graphStr margin(left)=1,margin(top)=1,margin(right)=1,margin(bottom)=1
+	ModifyGraph/W=$graphStr hideTrace=2, grid=1, log=1, mirror=1, standoff=0, axThick=0.1
+	SetAxis/W=$graphStr left 1,100
+	SetAxis/W=$graphStr bottom 1,100
+	Cursor/N=1/F/H=1/W=$graphStr A dummy bls.arsits, bls.arssd
+
+	SetVariable svSmooth_tab2, win=$panelStr, disable=1
+	CheckBox chkNeg_tab2, win=$panelStr, disable=1
+	CheckBox chkHull_tab2, win=$panelStr, disable=1
+	
+//	SetActiveSubwindow $panelStr
+end
+
+static function ShowARSgraph(STRUCT BLstruct &bls, int show)
+	string panelStr = bls.graph + "#BL_panel"
+	string graphStr = panelStr + "#g0"
+	
+	
+	if (show && WinType(graphStr)!=1)
+		MakeARSgraph(bls)
+		SetWindow $panelStr hook(hARS)=baselines#HookARS
+	elseif (show == 0)
+		KillWindow /Z $graphStr
+		SetWindow $panelStr hook(hARS)=$""
+	endif
+end
+
+static function HookARS(STRUCT WMWinHookStruct &s)
+	
+	
+	if (s.eventCode!=7 && s.eventCode!=5)
+		return 0
+	endif
+	
+	
+	STRUCT BLstruct bls
+	wave/SDFR=GetPackageDFREF() w_struct
+	StructGet bls w_struct
+	
+	if (s.eventCode == 5) // mouseup
+		GetWindow/Z $s.winName+"#g0" wsizeDC
+		if (V_flag == 0)
+			if (s.mouseloc.h<v_left || s.mouseloc.h>v_right || s.mouseloc.v<v_top || s.mouseloc.v>v_bottom)
+				KillWindow /Z $s.winName+"#g0"
+				SetWindow $s.winName hook(hARS)=$""
+				CheckBox chkNeg_tab2, win=$s.winName, disable=(bls.tab != 2)
+				CheckBox chkHull_tab2, win=$s.winName, disable=(bls.tab != 2)
+				SetVariable svSmooth_tab2, win=$s.winName, disable=(bls.tab != 2)
+			endif
+		endif
+		return 0
+	endif
+	
+	int newiterations = limit(round(hcsr(a, s.winName)), 1, 100)
+	variable newsd = limit(round(vcsr(a, s.winName)), 1, 100)
+	
+	if (newiterations==bls.arsits && newsd==bls.arssd)
+		return 0
+	endif
+	bls.arsits = newiterations
+	bls.arssd = newsd
+	
+	string panelStr = bls.graph + "#BL_panel"
+	SetVariable svARSsd_tab2, win=$panelStr, value=_NUM:bls.arssd
+	SetVariable svARSits_tab2, win=$panelStr, value=_NUM:bls.arsits
+	
+	//DoAutoFit(bls)
+	DoFit(bls)
+	
+	StructPut bls w_struct
+	return 0
+end
+
 static function BaselinePopups(STRUCT WMPopupAction &s)
 	
 	if (s.eventCode == -1)
 		return 0
 	endif
 		
-	wave /SDFR=GetDFREF() w_struct
+	wave/SDFR=GetPackageDFREF() w_struct
 	STRUCT BLstruct bls
 	StructGet bls w_struct
 	
@@ -1585,7 +1839,7 @@ static function BaselinePopups(STRUCT WMPopupAction &s)
 				break
 			endif
 		case 4: // dismissed without selection (Igor 9)
-		case 2: // mouseup	
+		case 2: // mouseup
 			
 			strswitch (s.ctrlName)
 				case "popTrace" :
@@ -1598,11 +1852,17 @@ static function BaselinePopups(STRUCT WMPopupAction &s)
 					break
 				case "popType" :
 					bls.type[bls.tab] = s.popNum - 1
-					SetFitFunc(bls) // store the name of the selected fit function in bls
+//					SetFitFunc(bls) // store the name of the selected fit function in bls
+					bls.fitfunc = s.popstr // much faster!
 					ResetGraphForType(bls)
 					ResetPanelForType(bls)
 					DoFit(bls)
 					StructPut bls w_struct // even if no trace is selected we want to save the current selection
+					break
+				case "popPlanck" :
+					bls.wavelength = s.popNum
+					DoFit(bls)
+					StructPut bls w_struct
 					break
 			endswitch
 						
@@ -1615,11 +1875,11 @@ end
 
 static function BaselineTabs(STRUCT WMTabControlAction &s)
 	
-	wave /SDFR=GetDFREF() w_struct
+	wave/SDFR=GetPackageDFREF() w_struct
 	STRUCT BLstruct bls
 	StructGet bls w_struct
 
-// *** kill panel ***	
+// *** kill panel ***
 	if (s.eventCode == -1) // control is being killed
 		if (WinType("BaselinesPrefsPanel") == 7)
 			return 0
@@ -1627,7 +1887,7 @@ static function BaselineTabs(STRUCT WMTabControlAction &s)
 		
 		PrefsSave(bls)
 		ClearGraph(bls, 0)
-		KillDataFolder /Z GetDFREF()
+		KillDataFolder/Z GetPackageDFREF()
 		return 0
 	endif
 		
@@ -1656,15 +1916,15 @@ static function ShowTab(STRUCT BLstruct &bls)
 	
 	string panelStr = bls.graph + "#BL_panel"
 	SetActiveSubwindow $panelStr
-	ModifyControlList /Z ControlNameList(panelStr,";","*_tab0"), win=$panelStr, disable=(bls.tab!=0)
-	ModifyControlList /Z ControlNameList(panelStr,";","*_tab1"), win=$panelStr, disable=(bls.tab!=1)
-	ModifyControlList /Z ControlNameList(panelStr,";","*_tab2"), win=$panelStr, disable=(bls.tab!=2)
-	ModifyControlList /Z ControlNameList(panelStr,";","*_tab3"), win=$panelStr, disable=(bls.tab!=3)
+	ModifyControlList/Z ControlNameList(panelStr,";","*_tab0"), win=$panelStr, disable=(bls.tab!=0)
+	ModifyControlList/Z ControlNameList(panelStr,";","*_tab1"), win=$panelStr, disable=(bls.tab!=1)
+	ModifyControlList/Z ControlNameList(panelStr,";","*_tab2"), win=$panelStr, disable=(bls.tab!=2)
+	ModifyControlList/Z ControlNameList(panelStr,";","*_tab3"), win=$panelStr, disable=(bls.tab!=3)
 	RedrawPicture(bls)
 	
 	Button btnFitAll, win=$panelStr, disable = 2*(bls.tab == 1)
 	
-	ControlInfo /W=$bls.Graph btnEdit_graph
+	ControlInfo/W=$bls.Graph btnEdit_graph
 	if (v_flag)
 		Button btnEdit_graph, win=$bls.Graph, disable=bls.tab!=3
 	endif
@@ -1672,13 +1932,13 @@ static function ShowTab(STRUCT BLstruct &bls)
 	string types = ""
 	switch (bls.tab)
 		case 0:
-			types = ksMaskedTypes + UserFitName()
+			types = ksMaskedTypes + GetListOfUserFuncs()
 			break
 		case 1:
 			types = ksManTypes
 			break
 		case 2:
-			types = ksAutoTypes + UserFitName()
+			types = ksAutoTypes + GetListOfUserFuncs()
 			break
 		case 3:
 			types = ksSplineTypes
@@ -1693,22 +1953,30 @@ end
 
 // returns truth that this procedure file has been updated since initialisation
 static function CheckUpdated(STRUCT BLstruct &bls, int restart)
-	int version = GetProcVersion("")
+	int version = GetThisVersion()
 	if (bls.version != version)
 		if (restart)
-			doalert 0, "You have updated the baseline fitting package since this panel was created.\r\rThe package will restart to update the control panel."
+			DoAlert 0, "You have updated the baseline fitting package since this panel was created.\r\rThe package will restart to update the control panel."
 			QuitBaselines(bls)
 			Initialise()
 		else
-			doalert 0, "You have updated the baseline fitting package since this panel was created.\r\rPlease close and reopen the 'Baseline Controls' panel to continue."
+			DoAlert 0, "You have updated the baseline fitting package since this panel was created.\r\rPlease close and reopen the 'Baseline Controls' panel to continue."
 		endif
 		return 1
 	endif
 	return 0
 end
 
+// for testing
+static function blsVersion()
+	DFREF dfr = GetPackageDFREF()
+	STRUCT BLstruct bls
+	StructGet bls dfr:w_struct
+	return bls.version
+end
+
 static function RepositionMarquee(STRUCT BLstruct &bls)
-	GetMarquee /W=$bls.graph
+	GetMarquee/W=$bls.graph
 	if (v_flag)
 		MarqueeSetAtSetvarValues(bls)
 	else
@@ -1726,32 +1994,32 @@ static function MarqueeSetAtSetvarValues(STRUCT BLstruct &bls)
 		string s_Xax = StringByKey("XAXIS", s_info)
 		string s_Yax = StringByKey("YAXIS", s_info)
 
-		GetMarquee /W=$bls.graph/Z
+		GetMarquee/W=$bls.graph/Z
 		if (v_flag == 0)
-			GetAxis /W=$bls.graph/Q $s_Yax
-			bls.roi.top = v_max
+			GetAxis/W=$bls.graph/Q $s_Yax
+			bls.roi.top    = v_max
 			bls.roi.bottom = v_min
 		endif
 		variable vL = bls.roi.left, vR = bls.roi.right
 		variable vT = bls.roi.top, vB = bls.roi.bottom
 		
 		#if (IgorVersion() >= 9)
-		SetMarquee /W=$bls.graph/HAX=$s_Xax/VAX=$s_Yax vL, vT, vR, vB
+		SetMarquee/W=$bls.graph/HAX=$s_Xax/VAX=$s_Yax vL, vT, vR, vB
 		#else
 		vL = PosFromAxisVal(bls.graph, s_Xax, vL)
 		vR = PosFromAxisVal(bls.graph, s_Xax, vR)
 		vT = PosFromAxisVal(bls.graph, s_Yax, vT)
 		vB = PosFromAxisVal(bls.graph, s_Yax, vB)
-		SetMarquee /W=$bls.graph vL, vT, vR, vB
+		SetMarquee/W=$bls.graph vL, vT, vR, vB
 		#endif
 		
 		// position buttons
-		GetMarquee /W=$bls.graph // units are points
+		GetMarquee/W=$bls.graph // units are points
 		SetMarqueeButtons(bls, V_left, V_top, V_right, V_bottom)
 	else
-		SetMarquee /W=$bls.graph 0, 0, 0, 0
-		KillControl /W=$bls.Graph btnAdd_graph
-		KillControl /W=$bls.Graph btnRemove_graph
+		SetMarquee/W=$bls.graph 0, 0, 0, 0
+		KillControl/W=$bls.Graph btnAdd_graph
+		KillControl/W=$bls.Graph btnRemove_graph
 	endif
 end
 
@@ -1766,7 +2034,6 @@ static function SetMarqueeButtons(STRUCT BLstruct &bls, variable vL, variable vT
 	
 	variable res = ScreenResolution
 	
-//	if (res == 96) // switch to pixels
 	if (res <= 96) // points -> pixels
 		variable PixPerPnt = res/72
 		vL *= PixPerPnt
@@ -1784,7 +2051,7 @@ static function SetMarqueeButtons(STRUCT BLstruct &bls, variable vL, variable vT
 	Button btnRemove_graph, win=$bls.Graph, Proc=Baselines#BaselineButtons
 	#if (IgorVersion() >= 9)
 	Button btnAdd_graph, win=$bls.Graph, Picture=baselines#transparent, labelBack=(0xFFFF,0xFFFF,0xFFFF,0), title="+"
-	Button btnRemove_graph, win=$bls.Graph, labelBack=(0xFFFF,0xFFFF,0xFFFF,0), Picture=baselines#transparent, title="-"
+	Button btnRemove_graph, win=$bls.Graph, Picture=baselines#transparent, labelBack=(0xFFFF,0xFFFF,0xFFFF,0), title="-"
 	#endif
 	return 1
 end
@@ -1825,7 +2092,7 @@ static function FitAll(STRUCT BLstruct &bls)
 	bls.trace = savTrace
 	SetTraceProperties(bls)
 	ResetGraphForTrace(bls)
-	PopupMenu /Z popTrace, win=$bls.graph+"#BL_panel", popmatch=savTrace
+	PopupMenu/Z popTrace, win=$bls.graph+"#BL_panel", popmatch=savTrace
 	DoFit(bls)
 	bls.multi = 0
 end
@@ -1834,9 +2101,9 @@ end
 static function ResetPanelForType(STRUCT BLstruct &bls)
 	string panelStr = bls.graph + "#BL_panel"
 	
+	// deal with controls that appear in one tab
 	switch (bls.tab)
 		case 0:
-			SetVariable svSD_tab0, win=$panelStr, disable=(cmpstr(bls.fitfunc, "spline")!=0)
 			break
 		case 1:
 			RedrawPicture(bls)
@@ -1846,6 +2113,11 @@ static function ResetPanelForType(STRUCT BLstruct &bls)
 			int isArcHull = (cmpstr(bls.fitfunc, "arc hull")==0 || cmpstr(bls.fitfunc, "hull spline")==0)
 			SetVariable svDepth_tab2, win=$panelStr, disable=!isArcHull
 			CheckBox chkHull_tab2, win=$panelStr, disable=2*isArcHull
+			CheckBox chkNeg_tab2, win=$panelStr, disable=0
+			SetVariable svARSits_tab2, win=$panelStr, disable=(cmpstr(bls.fitfunc, "ARS")!=0)
+			SetVariable svARSsd_tab2, win=$panelStr, disable=(cmpstr(bls.fitfunc, "ARS")!=0)
+			SetVariable svSmooth_tab2, win=$panelStr, disable=0
+			ShowARSgraph(bls, 0)
 			break
 		case 3:
 			SetVariable svF_tab3, win=$panelStr, disable=(cmpstr(bls.fitfunc, "smoothing")!=0)
@@ -1853,7 +2125,8 @@ static function ResetPanelForType(STRUCT BLstruct &bls)
 			break
 	endswitch
 	
-	if (cmpstr(bls.fitfunc, "poly")!=0)
+	// deal with controls that appear in multiple tabs
+	if (cmpstr(bls.fitfunc, "poly") != 0)
 		SetVariable svPoly, win=$panelStr, disable=1
 	elseif (bls.tab == 1) // limit poly order to 5
 		bls.polyorder = min(5, bls.polyorder)
@@ -1881,8 +2154,12 @@ static function ResetPanelForType(STRUCT BLstruct &bls)
 			default:
 				CheckBox chkPeak, win=$panelStr, disable=1
 		endswitch
+		PopupMenu popPlanck, win=$panelStr, disable=(cmpstr(bls.fitfunc, "Planck") != 0)
+		SetVariable svSD, win=$panelStr, disable=(cmpstr(bls.fitfunc, "spline") != 0)
 	else
 		CheckBox chkPeak, win=$panelStr, disable=1
+		PopupMenu popPlanck, win=$panelStr, disable=1
+		SetVariable svSD, win=$panelStr, disable=1
 	endif
 	
 end
@@ -1890,29 +2167,29 @@ end
 static function RedrawPicture(STRUCT BLstruct &bls)
 	
 	string panelStr = bls.graph + "#BL_panel"
-	DrawAction /L=ProgBack/W=$panelStr getgroup=ManPic, delete
+	DrawAction/L=ProgBack/W=$panelStr getgroup=ManPic, delete
 	
 	if (bls.tab != 1)
 		return 0
 	endif
 	
-	SetDrawLayer /W=$panelStr ProgBack
-	SetDrawEnv /W=$panelStr gstart, gname=ManPic
+	SetDrawLayer/W=$panelStr ProgBack
+	SetDrawEnv/W=$panelStr gstart, gname=ManPic
 	string picName = "baselines#p" + ReplaceString(" ", bls.fitfunc, "_")
 	variable scale = ScreenResolution > 72 ? 0.3 * ScreenResolution / 72 : 0.3
-	DrawPICT /W=$panelStr 45, 150, scale, scale, $picName
-	SetDrawEnv /W=$panelStr gstop, gname=ManPic
+	DrawPICT/W=$panelStr 45, 150, scale, scale, $picName
+	SetDrawEnv/W=$panelStr gstop, gname=ManPic
 end
 
 // sets the graph up for given type of baseline
 static function ResetGraphForType(STRUCT BLstruct &bls)
 	
 	if (bls.tab != 1)
-		Cursor /K/W=$bls.graph F
-		Cursor /K/W=$bls.graph G
-		Cursor /K/W=$bls.graph H
-		Cursor /K/W=$bls.graph I
-		Cursor /K/W=$bls.graph J
+		Cursor/K/W=$bls.graph F
+		Cursor/K/W=$bls.graph G
+		Cursor/K/W=$bls.graph H
+		Cursor/K/W=$bls.graph I
+		Cursor/K/W=$bls.graph J
 	endif
 		
 	switch (bls.tab)
@@ -1935,37 +2212,43 @@ end
 
 // I don't know a good way to guess noise level without knowing something about the signal
 static function ResetSD(STRUCT BLstruct &bls)
-	DFREF dfr = GetDFREF()
-	wave /SDFR=dfr w_mask
-	wave /Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	DFREF dfr = GetPackageDFREF()
+	wave/SDFR=dfr/Z w_mask
+	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
 	if (WaveExists(w_data) == 0)
 		return 1
 	endif
-	Extract /free w_data, temp, w_mask
+	
+	if (bls.tab == 0)
+		Extract/free w_data, temp, w_mask
+	else
+		Duplicate/free w_data temp //should try to eliminate peaks?
+	endif
+	
 	if (numpnts(temp) == 0)
-		Duplicate /free w_data temp
+		Duplicate/free w_data temp
 	endif
 	temp = temp - temp[max(0,p-1)]
-	WaveStats /Q temp
-	bls.sd = v_sdev/3
-	SetVariable svSD_tab0, win=$bls.graph+"#BL_panel",limits={0,Inf,bls.sd/10},value=_NUM:bls.sd
+	WaveStats/Q temp
+	bls.sd = v_sdev/15
+	SetVariable svSD, win=$bls.graph+"#BL_panel", limits={0,Inf,bls.sd/10}, value=_NUM:bls.sd
 end
 
 static function ResetTangentWaves(STRUCT BLstruct &bls)
 	if (bls.tab==0 && cmpstr(bls.fitfunc, "tangent")==0)
-		DFREF dfr = GetDFREF()
-		Make /O/N=0 dfr:tangent0 /WAVE=tangent0, dfr:tangent1 /WAVE=tangent1
+		DFREF dfr = GetPackageDFREF()
+		Make/O/N=0 dfr:tangent0 /WAVE=tangent0, dfr:tangent1 /WAVE=tangent1
 		
 		// make sure the zero-point waves won't plot outside x-axis
 		// range before appending to graph
-		GetAxis /W=$bls.graph/Q $(StringByKey("XAXIS", TraceInfo(bls.graph,bls.trace,0)))
-		SetScale /P x, V_min, 1, tangent0, tangent1
+		GetAxis/W=$bls.graph/Q $(StringByKey("XAXIS", TraceInfo(bls.graph,bls.trace,0)))
+		SetScale/P x, V_min, 1, tangent0, tangent1
 				
 		AppendToSameAxes(bls.graph, bls.trace, tangent0, $"", matchOffset=1, unique=1)
 		AppendToSameAxes(bls.graph, bls.trace, tangent1, $"", matchOffset=1, unique=1)
 		// preserve Y offsets; X offsets will lead only to trouble
 	else
-		RemoveFromGraph /Z/W=$bls.graph tangent0, tangent1
+		RemoveFromGraph/Z/W=$bls.graph tangent0, tangent1
 	endif
 end
 
@@ -1974,9 +2257,9 @@ static function ResetCursorsForManFit(STRUCT BLstruct &bls)
 	// do an auto fit to choose cursor positions
 	string xAxisName = StringByKey("XAXIS", TraceInfo(bls.graph, bls.trace, 0))
 	string yAxisName = StringByKey("YAXIS", TraceInfo(bls.graph, bls.trace, 0))
-	GetAxis /W=$bls.graph /Q $xAxisName
+	GetAxis/W=$bls.graph/Q $xAxisName
 	variable xleft = v_min, xright = v_max, xrange = xright - xleft
-	GetAxis /W=$bls.graph /Q $yAxisName
+	GetAxis/W=$bls.graph/Q $yAxisName
 	variable ybottom = v_min, ytop = v_max, yrange = ytop - ybottom
 	SetAxis $yAxisName, V_min, V_max
 	
@@ -2100,13 +2383,13 @@ static function SetCursorsForManFit(STRUCT BLstruct &bls)
 	
 	// remove unneeded cursors
 	if (numCursors < 5)
-		Cursor /K/W=$bls.graph F
+		Cursor/K/W=$bls.graph F
 		if (numCursors < 4)
-			Cursor /K/W=$bls.graph J
+			Cursor/K/W=$bls.graph J
 			if (numCursors < 3)
-				Cursor /K/W=$bls.graph I
+				Cursor/K/W=$bls.graph I
 				if (numCursors < 2)
-					Cursor /K/W=$bls.graph H
+					Cursor/K/W=$bls.graph H
 				endif
 			endif
 		endif
@@ -2118,36 +2401,36 @@ static function SetCursorsForManFit(STRUCT BLstruct &bls)
 	SetWindow $bls.graph hook(hBaselines)=$""
 	switch (numCursors)
 		case 5: // poly 5
-			Cursor /F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) F $bls.trace bls.csr.F.x, bls.csr.F.y
+			Cursor/F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) F $bls.trace bls.csr.F.x, bls.csr.F.y
 		case 4: // or poly 4
-			Cursor /F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) J $bls.trace bls.csr.J.x, bls.csr.J.y
+			Cursor/F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) J $bls.trace bls.csr.J.x, bls.csr.J.y
 		case 3: // or poly 3
-			Cursor /F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) I $bls.trace bls.csr.I.x, bls.csr.I.y
+			Cursor/F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) I $bls.trace bls.csr.I.x, bls.csr.I.y
 		case 2 : // or sin, lor, gauss, sigmoid, line
-			Cursor /F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) H $bls.trace bls.csr.H.x, bls.csr.H.y
+			Cursor/F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) H $bls.trace bls.csr.H.x, bls.csr.H.y
 		default: // or constant
-			Cursor /F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) G $bls.trace bls.csr.G.x, bls.csr.G.y
+			Cursor/F/W=$bls.graph/N=1/H=0/S=1/C=(rgb[0],rgb[1],rgb[2]) G $bls.trace bls.csr.G.x, bls.csr.G.y
 	endswitch
 	SetWindow $bls.graph hook(hBaselines)=baselines#hookBaselines
 end
 
 static function ResetCursorsForSubrange(STRUCT BLstruct &bls)
 	if (bls.subrange == 0)
-		Cursor /K/W=$bls.graph C
-		Cursor /K/W=$bls.graph D
+		Cursor/K/W=$bls.graph C
+		Cursor/K/W=$bls.graph D
 		return 0
 	endif
 	
-	wave /Z w = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w = TraceNameToWaveRef(bls.graph, bls.trace)
 	if (WaveExists(w) == 0)
 		return 0
 	endif
 	
-	Make /free/N=(2) range = {bls.csr.C.x,bls.csr.D.x}
+	Make/free/N=(2) range = {bls.csr.C.x,bls.csr.D.x}
 
 	// put cursors on graph
 	string xAxisName = StringByKey("XAXIS", TraceInfo(bls.graph, bls.trace, 0))
-	GetAxis /W=$bls.graph/Q $xAxisName
+	GetAxis/W=$bls.graph/Q $xAxisName
 	variable xmin = v_min, xmax = v_max
 	
 	range = numtype(range) == 0 ? range : ( p ? xmax - (xmax-xmin)/50 : xmin + (xmax-xmin)/50 )
@@ -2158,24 +2441,24 @@ static function ResetCursorsForSubrange(STRUCT BLstruct &bls)
 	SetVariable svR win=$bls.graph+"#BL_panel", value=_NUM:bls.csr.D.x
 	GetPointsFromCursors(bls)
 	
-	wave /SDFR=GetDFREF() w_struct
+	wave/SDFR=GetPackageDFREF() w_struct
 	StructPut bls w_struct
 	
 	wave rgb = ChooseCursorColor(bls)
 	
 	SetWindow $bls.graph hook(hBaselines)=$""
-	Cursor /F/W=$bls.graph/N=1/H=2/S=2/C=(rgb[0],rgb[1],rgb[2]) C $bls.trace range[0], 0
-	Cursor /F/W=$bls.graph/N=1/H=2/S=2/C=(rgb[0],rgb[1],rgb[2]) D $bls.trace range[1], 0
+	Cursor/F/W=$bls.graph/N=1/H=2/S=2/C=(rgb[0],rgb[1],rgb[2]) C $bls.trace range[0], 0
+	Cursor/F/W=$bls.graph/N=1/H=2/S=2/C=(rgb[0],rgb[1],rgb[2]) D $bls.trace range[1], 0
 	SetWindow $bls.graph hook(hBaselines)=baselines#hookBaselines
 end
 
 static function GetPointsFromCursors(STRUCT BLstruct &bls)
 	
-	DFREF dfr = GetDFREF()
-	wave /Z w = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	DFREF dfr = GetPackageDFREF()
+	wave/Z w = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 
-	Make /free/N=2 w_pRange={0, 0}, w_Xrange={bls.csr.C.x,bls.csr.D.x}
+	Make/free/N=2 w_pRange={0, 0}, w_Xrange={bls.csr.C.x,bls.csr.D.x}
 	if (bls.XY)
 		w_pRange = GetPointFromXwave(w_x, w_Xrange)
 	else
@@ -2197,7 +2480,7 @@ static function GetPointFromXwave(wave xwave, variable xval)
 	elseif (xval < xmin)
 		return ascending ? 0 : lastpoint
 	else
-		FindLevel /Q/P xwave, xval
+		FindLevel/Q/P xwave, xval
 		if (v_flag == 0)
 			return V_LevelX
 		endif
@@ -2214,14 +2497,14 @@ static function SelectTrace(STRUCT BLstruct &bls)
 end
 
 // make sure structure wave is up to date before calling
-static function /S GetTracesForPopup()
-	DFREF dfr = GetDFREF()
+static function/S GetTracesForPopup()
+	DFREF dfr = GetPackageDFREF()
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
 	return GetTraceList(bls)
 end
 
-static function /S GetTraceList(STRUCT BLstruct &bls)
+static function/S GetTraceList(STRUCT BLstruct &bls)
 	string listStr = TraceNameList(bls.graph, ";", 1+4)
 	string removeStr = "w_display;w_base;w_sub;tangent0;tangent1;w_nodesY;"
 	removeStr += ListMatch(listStr, "*" + bls.blSuff)
@@ -2238,8 +2521,8 @@ static function /S GetTraceList(STRUCT BLstruct &bls)
 			listStr = RemoveListItem(i, listStr)
 			continue
 		endif
-		wave /Z w_x = XWaveRefFromTrace(bls.graph, strTrace)
-		if (wavetype(w_x, 1) > 1) // may be category plot
+		wave/Z w_x = XWaveRefFromTrace(bls.graph, strTrace)
+		if (WaveType(w_x, 1) > 1) // may be category plot
 			listStr = RemoveListItem(i, listStr)
 		endif
 	endfor
@@ -2255,56 +2538,56 @@ static function ClearGraph(STRUCT BLstruct &bls, int killPanel)
 		return 0
 	endif
 	
-	GraphNormal /W=$bls.graph
+	GraphNormal/W=$bls.graph
 	SetWindow $bls.graph hook(hBaselines)=$""
-	Cursor /K/W=$bls.graph C
-	Cursor /K/W=$bls.graph D
-	Cursor /K/W=$bls.graph E
-	Cursor /K/W=$bls.graph F
-	Cursor /K/W=$bls.graph G
-	Cursor /K/W=$bls.graph H
-	Cursor /K/W=$bls.graph I
-	Cursor /K/W=$bls.graph J
+	Cursor/K/W=$bls.graph C
+	Cursor/K/W=$bls.graph D
+	Cursor/K/W=$bls.graph E
+	Cursor/K/W=$bls.graph F
+	Cursor/K/W=$bls.graph G
+	Cursor/K/W=$bls.graph H
+	Cursor/K/W=$bls.graph I
+	Cursor/K/W=$bls.graph J
 	
-	KillControl /W=$bls.Graph btnEdit_graph
-	KillControl /W=$bls.Graph btnAdd_graph
-	KillControl /W=$bls.Graph btnRemove_graph
+	KillControl/W=$bls.Graph btnEdit_graph
+	KillControl/W=$bls.Graph btnAdd_graph
+	KillControl/W=$bls.Graph btnRemove_graph
 
-	DFREF dfr = GetDFREF()
-	wave /Z/SDFR=dfr w_display, w_base, w_sub, tangent0, tangent1, w_nodesY
+	DFREF dfr = GetPackageDFREF()
+	wave/Z/SDFR=dfr w_display, w_base, w_sub, tangent0, tangent1, w_nodesY
 	
-	wave /Z w = dfr:w_spline_dependency
+	wave/Z w = dfr:w_spline_dependency
 	if (WaveExists(w))
 		SetFormula w, "" // remove dependency
 	endif
 	
 	do // remove all instances of w_display
-		RemoveFromGraph /W=$bls.graph/Z w_display
-		CheckDisplayed /W=$bls.graph w_display
+		RemoveFromGraph/W=$bls.graph/Z w_display
+		CheckDisplayed/W=$bls.graph w_display
 	while (V_flag) // should be okay.
 	// if somehow our package waves were displayed with different tracenames
 	// that would be a problem.
 	do // remove all instances of w_base
-		RemoveFromGraph /W=$bls.graph/Z w_base
-		CheckDisplayed /W=$bls.graph w_base
+		RemoveFromGraph/W=$bls.graph/Z w_base
+		CheckDisplayed/W=$bls.graph w_base
 	while (V_flag)
 	do // remove all instances of w_sub
-		RemoveFromGraph /W=$bls.graph/Z w_sub
-		CheckDisplayed /W=$bls.graph w_sub
+		RemoveFromGraph/W=$bls.graph/Z w_sub
+		CheckDisplayed/W=$bls.graph w_sub
 	while (V_flag)
 	do // remove all instances of tangent waves
-		RemoveFromGraph /W=$bls.graph/Z tangent0, tangent1
-		CheckDisplayed /W=$bls.graph tangent0, tangent1
+		RemoveFromGraph/W=$bls.graph/Z tangent0, tangent1
+		CheckDisplayed/W=$bls.graph tangent0, tangent1
 	while (V_flag)
 	do // remove all instances of nodes wave
-		RemoveFromGraph /W=$bls.graph/Z w_nodesY
-		CheckDisplayed /W=$bls.graph w_nodesY
+		RemoveFromGraph/W=$bls.graph/Z w_nodesY
+		CheckDisplayed/W=$bls.graph w_nodesY
 	while (V_flag)
 	
 	ResetColors(bls, 0)
 	
 	if (killPanel)
-		KillWindow /Z $bls.graph+"#BL_panel"
+		KillWindow/Z $bls.graph+"#BL_panel"
 	endif
 	bls.datalength = 0
 end
@@ -2316,11 +2599,11 @@ static function SubtractBaseline(STRUCT BLstruct &bls)
 		return 0
 	endif
 		
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	wave w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 	
-	wave /SDFR=dfr w_base, w_sub, w_nodesX, w_nodesY
+	wave/Z/SDFR=dfr w_base, w_sub, w_nodesX, w_nodesY, w_mask
 	if (numpnts(w_base) != numpnts(w_data)) // should never happen
 		if (!bls.multi)
 			Print NameOfWave(w_data) + " and baseline have different length"
@@ -2330,24 +2613,20 @@ static function SubtractBaseline(STRUCT BLstruct &bls)
 		return 0
 	endif
 	
-	WaveStats /Q/M=1 w_base
+	WaveStats/Q/M=1 w_base
 	if (V_npnts == 0)
 		return 0
 	endif
 	
-	if (bls.options&0x100)
-		DFREF outputDFR = GetDataFolderDFR()
-	else
-		DFREF outputDFR = GetWavesDataFolderDFR(w_data)
-	endif
-	
+	DFREF outputDFR = GetOutputDataFolder(bls)
+
 	string noteStr = "", msg = "", strOutput = ""
 	
 	// save a copy of the baseline
 	string strNewName = CleanupName(NameOfWave(w_data) + bls.blSuff, 0)
-	if ((bls.options&0x80)==0 && bls.multi==0 && exists(strNewName))
+	if ((bls.options&0x80)==0 && bls.multi==0 && WaveExists(outputDFR:$strNewName))
 		if (bls.subrange)
-			WaveStats /Q/M=1/R=[bls.endp[0], bls.endp[1]] $strNewName
+			WaveStats/Q/M=1/R=[bls.endp[0], bls.endp[1]] $strNewName
 			if (V_npnts)
 				sprintf msg, "Overwrite %s[%g,%g]?", strNewName, bls.endp[0], bls.endp[1]
 			endif
@@ -2357,18 +2636,18 @@ static function SubtractBaseline(STRUCT BLstruct &bls)
 		
 		if (strlen(msg))
 			DoAlert 1, msg
-			if (V_flag==2)
+			if (V_flag == 2)
 				return 0
 			endif
 		endif
 	endif
-	
+
 	if (bls.subrange)
-		wave /Z newbase = outputDFR:$strNewName
+		wave/Z newbase = outputDFR:$strNewName
 		if (WaveExists(newbase) == 0)
 			Duplicate w_data outputDFR:$strNewName /wave=newbase
 			FastOp newbase = (NaN)
-			note /K newbase
+			note/K newbase
 		endif
 		if (bls.endp[1] == bls.endp[0])
 			return 0
@@ -2379,15 +2658,15 @@ static function SubtractBaseline(STRUCT BLstruct &bls)
 			note newbase noteStr // append note
 		endif
 	else
-		Duplicate /O w_base outputDFR:$strNewName /wave=newbase
+		Duplicate/O w_base outputDFR:$strNewName /wave=newbase
 		noteStr = note(w_base)
 	endif
 	
 	// subtract baseline
 	strNewName = CleanupName(NameOfWave(w_data) + bls.subSuff, 0)
-	if ((bls.options&0x80)==0 && bls.multi==0 && exists(strNewName))
+	if ((bls.options&0x80)==0 && bls.multi==0 && WaveExists(outputDFR:$strNewName))
 		if (bls.subrange)
-			WaveStats /Q/M=1/R=[bls.endp[0], bls.endp[1]] $strNewName
+			WaveStats/Q/M=1/R=[bls.endp[0], bls.endp[1]] $strNewName
 			if (V_npnts)
 				sprintf msg, "Overwrite %s[%g,%g]?", strNewName, bls.endp[0], bls.endp[1]
 			endif
@@ -2397,34 +2676,48 @@ static function SubtractBaseline(STRUCT BLstruct &bls)
 		
 		if (strlen(msg))
 			DoAlert 1, msg
-			if (V_flag==2)
+			if (V_flag == 2)
 				return 0
 			endif
 		endif
 	endif
 	
 	if (bls.subrange)
-		wave /Z subtracted = outputDFR:$strNewName
+		wave/Z subtracted = outputDFR:$strNewName
 		if (WaveExists(subtracted) == 0)
 			Duplicate w_data outputDFR:$strNewName /wave=subtracted
 			FastOp subtracted = (NaN)
 		endif
 		subtracted[bls.endp[0], bls.endp[1]] = w_data - w_base + bls.base
 	else
-		Duplicate /O w_data $strNewName /wave=subtracted
+		Duplicate/O w_data outputDFR:$strNewName /wave=subtracted
 		FastOp subtracted = w_data - w_base + (bls.base)
+	endif
+	
+		
+	if (bls.tab==0 && bls.options&0x200) // save mask
+		strNewName = CleanupName(NameOfWave(w_data) + bls.maskSuff, 0)
+		wave/Z mask = outputDFR:$strNewName
+		if ((bls.options&0x80)==0 && bls.multi==0 && WaveExists(mask))
+			msg = strNewName + " exists. Overwrite?"
+			DoAlert 1, msg
+			if (V_flag == 2)
+				return 0
+			endif
+		endif
+		Duplicate/O w_mask outputDFR:$strNewName /wave=mask
 	endif
 	
 	if (bls.tab==3 && bls.subrange==0)
 		strNewName = CleanupName(NameOfWave(w_data) + "_SpNodes", 0)
-		if ((bls.options&0x80)==0 && bls.multi==0 && exists(strNewName))
+		if ((bls.options&0x80)==0 && bls.multi==0 && WaveExists(outputDFR:$strNewName))
 			DoAlert 1, strNewName + " exists. Overwrite?"
 			if (V_flag == 2)
 				return 0
 			endif
 		endif
-		Duplicate /O w_nodesX outputDFR:$strNewName /WAVE=nd
-		Redimension /N=(-1, 2) nd
+		Duplicate/O w_nodesX outputDFR:$strNewName /WAVE=nd
+		Redimension/N=(-1, 2) nd
 		nd[][0] = w_nodesX[p]
 		nd[][1] = w_nodesY[p]
 		note nd, "nodes:" + NameOfWave(w_data)
@@ -2454,10 +2747,10 @@ static function SubtractBaseline(STRUCT BLstruct &bls)
 	if (WaveExists(w_x)) // make sure the output wave has an xwave tag for XYbrowser
 		noteStr = note(subtracted)
 		noteStr = ReplaceStringByKey("Xwave", noteStr, NameOfWave(w_x), ":", "\r")
-		note /K subtracted, noteStr
+		note/K subtracted, noteStr
 		noteStr = note(newbase)
 		noteStr = ReplaceStringByKey("Xwave", noteStr, NameOfWave(w_x), ":", "\r")
-		note /K newbase, noteStr
+		note/K newbase, noteStr
 	endif
 	
 	RestoreTraceColor(bls) // for all-at-once fitting
@@ -2470,21 +2763,21 @@ static function SubtractBaseline(STRUCT BLstruct &bls)
 		AppendToSameAxes(bls.graph, bls.trace, newbase, w_x, matchRGB=((bls.options&0x20)==0), w_rgb={0,0,0}, matchOffset=1, unique=1)
 	endif
 	
-	CheckDisplayed /W=$bls.graph w_sub, w_base, w_nodesY
+	CheckDisplayed/W=$bls.graph w_sub, w_base, w_nodesY
 	if (v_flag & 1)
-		ReorderTraces /W=$bls.graph _front_, {w_sub}
+		ReorderTraces/W=$bls.graph _front_, {w_sub}
 	endif
 	if (v_flag & 2)
-		ReorderTraces /W=$bls.graph _front_, {w_base}
+		ReorderTraces/W=$bls.graph _front_, {w_base}
 	endif
 	if (v_flag & 4)
-		ReorderTraces /W=$bls.graph _front_, {w_nodesY}
+		ReorderTraces/W=$bls.graph _front_, {w_nodesY}
 	endif
 	
 	if (bls.options & 4) // remove trace after fitting
-		RemoveFromGraph /W=$bls.graph/Z $bls.trace, w_base
+		RemoveFromGraph/W=$bls.graph/Z $bls.trace, w_base
 		PopupMenu popTrace, win=$bls.graph+"#BL_panel", mode=1
-		ControlInfo /W=$bls.graph+"#BL_panel" popTrace
+		ControlInfo/W=$bls.graph+"#BL_panel" popTrace
 		bls.trace = S_value
 		SetTraceProperties(bls)
 		StructPut bls, dfr:w_struct
@@ -2505,25 +2798,45 @@ end
 
 // if a baseline has been subtracted from the currently active trace, this
 // returns its wave reference
-static function /wave GetBLWave(STRUCT BLstruct &bls)
+static function/wave GetBLWave(STRUCT BLstruct &bls)
 	if (bls.datalength == 0)
 		return $""
 	endif
+	
 	wave w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	if (bls.options&0x100)
-		DFREF dfr = GetDataFolderDFR()
-	else
-		DFREF dfr = GetWavesDataFolderDFR(w_data)
-	endif
-	wave /Z sub = dfr:$CleanupName(NameOfWave(w_data) + bls.blSuff, 0)
+	DFREF dfr = GetOutputDataFolder(bls)
+		
+	wave/Z sub = dfr:$CleanupName(NameOfWave(w_data) + bls.blSuff, 0)
 	if (WaveExists(sub) && numpnts(sub) != numpnts(w_data))
-		wave /Z sub = $""
+		wave/Z sub = $""
 	endif
 	return sub
 end
 
+static function/DF GetOutputDataFolder(STRUCT BLstruct &bls)
+	if (bls.datalength == 0)
+		return $""
+	endif
+	wave w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	if (bls.options & 0x100)
+		DFREF OutputDFR = GetDataFolderDFR()
+	else
+		DFREF OutputDFR = GetWavesDataFolderDFR(w_data)
+	endif
+	
+	if (bls.options & 0x400) // use subfolders
+		string subfolder = "baselines_"
+		subfolder += StringFromList(bls.tab, "mask_;man_;auto_;spline_")
+		subfolder += bls.FitFunc
+		subfolder = CleanupName(subfolder, 0)
+		NewDataFolder/O $GetDataFolder(1, OutputDFR) + subfolder
+		DFREF OutputDFR = $GetDataFolder(1, OutputDFR) + subfolder
+	endif
+	return OutputDFR
+end
+
 // this function is slow because of the string list handling functions
-static function /S CreateNote(STRUCT BLstruct &bls)
+static function/S CreateNote(STRUCT BLstruct &bls)
 	
 	string keyList = "", strItem = ""
 	int i
@@ -2563,14 +2876,14 @@ static function /S CreateNote(STRUCT BLstruct &bls)
 			if (cmpstr(bls.fitfunc, "smoothing") == 0) // smoothing
 				keyList = ReplaceNumberByKey("F", keyList, bls.flagF, "=", ";")
 			endif
-			wave /SDFR=GetDFREF() w_nodesX
+			wave/SDFR=GetPackageDFREF() w_nodesX
 			keyList = ReplaceNumberByKey("numNodes", keyList, numpnts(w_nodesX), "=", ";")
 			break
 	endswitch
 	
 	// deal with coefficient wave
 	if (bls.tab < 3)
-		wave /Z w_coef = w_coef
+		wave/Z w_coef = w_coef
 		if (WaveExists(w_coef))
 			strItem = "{" + num2str(w_coef[0])
 			for (i=1;i<numpnts(w_coef);i++)
@@ -2602,7 +2915,7 @@ end
 // construct a wavenote for spline fit. this function is slow because of
 // the string list handling functions, but we don't run this until
 // subtraction
-static function /S CreateSplineNote(STRUCT BLstruct &bls)
+static function/S CreateSplineNote(STRUCT BLstruct &bls)
 	
 	string keyList = "", strItem = ""
 	int i
@@ -2615,7 +2928,7 @@ static function /S CreateSplineNote(STRUCT BLstruct &bls)
 	if (cmpstr(bls.fitfunc, "smoothing") == 0)
 		keyList = ReplaceNumberByKey("F", keyList, bls.flagF, "=", ";")
 	endif
-	wave /SDFR=GetDFREF() w_nodesX
+	wave/SDFR=GetPackageDFREF() w_nodesX
 	keyList = ReplaceNumberByKey("numNodes", keyList, numpnts(w_nodesX), "=", ";")
 	
 	if (bls.subrange)
@@ -2653,7 +2966,7 @@ static function DoFit(STRUCT BLstruct &bls)
 		case 2:
 			return DoAutoFit(bls)
 		case 3:
-			DFREF dfr = GetDFREF()
+			DFREF dfr = GetPackageDFREF()
 			StructPut bls dfr:w_struct
 			DoSplineFit({NaN})
 			return 1
@@ -2668,10 +2981,10 @@ static function DoManFit(STRUCT BLstruct &bls)
 	endif
 	
 	wave w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 	
-	DFREF dfr = GetDFREF()
-	wave /SDFR=dfr w_base, w_sub
+	DFREF dfr = GetPackageDFREF()
+	wave/SDFR=dfr w_base, w_sub
 	
 	string noteStr = ""
 	
@@ -2703,7 +3016,7 @@ static function DoManFit(STRUCT BLstruct &bls)
 	x5 = bls.csr.F.x
 	y5 = bls.csr.F.y - bls.offset.y
 	
-	Make /D/O/N=1 w_coef
+	Make/D/O/N=1 w_coef
 	strswitch (bls.fitfunc)
 		case "constant":
 			w_coef = {y1}
@@ -2728,8 +3041,8 @@ static function DoManFit(STRUCT BLstruct &bls)
 			endif
 			break
 		case "poly":
-			Make /free/D coordinates={{x1,x2,x3,x4,x5},{y1,y2,y3,y4,y5}}
-			Redimension /N=(bls.polyorder,-1) coordinates, w_coef
+			Make/free/D coordinates={{x1,x2,x3,x4,x5},{y1,y2,y3,y4,y5}}
+			Redimension/N=(bls.polyorder,-1) coordinates, w_coef
 			wave polyCoef = PolyCoeffcients(coordinates)
 			w_coef = polyCoef
 			if (numPoints > kMultithreadCutoff)
@@ -2788,7 +3101,11 @@ static function DoManFit(STRUCT BLstruct &bls)
 			endif
 			break
 		case "sigmoid":
-			w_coef = {y1, y2-y1, (x1+x2)/2, abs(x1-x2)/10}
+			if (x2 >= x1)
+				w_coef = {y1, y2-y1, (x1+x2)/2, abs(x1-x2)/10}
+			else
+				w_coef = {y2, y1-y2, (x1+x2)/2, abs(x2-x1)/10}
+			endif
 			if (numPoints > kMultithreadCutoff)
 				if (WaveExists(w_x))
 					multithread w_base[p1,p2] = W_coef[0] + W_coef[1]/(1+exp(-(w_x[p]-W_coef[2])/W_coef[3]))
@@ -2813,7 +3130,7 @@ static function DoManFit(STRUCT BLstruct &bls)
 	noteStr += "};"
 	
 	// update note in w_base so that it's copied to output wave by SubtractBaseline()
-	note /K w_base noteStr
+	note/K w_base noteStr
 
 	FastOp w_sub = w_data - w_base + (bls.base)
 	
@@ -2825,13 +3142,11 @@ static function DoMaskedFit(STRUCT BLstruct &bls)
 	if (bls.datalength == 0)
 		return 0
 	endif
-	
-	string panelStr = bls.graph + "#BL_panel"
 		
-	DFREF dfr = GetDFREF()
-	wave /Z/SDFR=dfr w_base, w_display, w_mask, w_sub
-	wave /Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	DFREF dfr = GetPackageDFREF()
+	wave/Z/SDFR=dfr w_base, w_display, w_mask, w_sub
+	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 	
 	if (WaveMin(w_mask)==0 && WaveMax(w_mask)==0) // no region to fit
 		if (bls.subrange)
@@ -2846,7 +3161,7 @@ static function DoMaskedFit(STRUCT BLstruct &bls)
 		if (cmpstr(bls.fitfunc, "tangent") == 0)
 			ClearTangentWaves()
 		endif
-		note /K w_base
+		note/K w_base
 		
 		return 0
 	endif
@@ -2912,14 +3227,14 @@ static function DoMaskedFit(STRUCT BLstruct &bls)
 	endif
 	
 	// update note in w_base so that it's copied to output wave by SubtractBaseline()
-	note /K w_base noteStr
+	note/K w_base noteStr
 	
 	FastOp w_sub = w_data - w_base + (bls.base)
 	return 1
 end
 
 // figure out ranges used for fitting from mask wave
-static function /S MaskString(wave w_mask, wave /Z w_x)
+static function/S MaskString(wave w_mask, wave/Z w_x)
 	int i
 	int imax = numpnts(w_mask), used = 0
 	variable xVal
@@ -2942,54 +3257,54 @@ static function /S MaskString(wave w_mask, wave /Z w_x)
 	return "fit regions=" + RemoveEnding(rangeStr, ",") + ";"
 end
 
-static function FitMaskedSpline(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave w_mask, wave w_base)
+static function FitMaskedSpline(STRUCT BLstruct &bls, wave w_data, wave/Z w_x, wave w_mask, wave w_base)
 	
-	Duplicate /free w_data w_masked
+	Duplicate/free w_data w_masked
 	
 	FastOp w_masked = w_data / w_mask
 	
-	WaveStats /Q/M=1 w_masked
-	if (V_npnts<4)
+	WaveStats/Q/M=1 w_masked
+	if (V_npnts < 4)
 		FastOp w_base = (NaN)
 		return 0
 	endif
 	
 	if (WaveExists(w_x))
 		#if (IgorVersion() < 9)
-		Duplicate /free w_x w_x2 // source and destination must be different
-		Interpolate2 /T=3/I=3/F=1/S=(bls.sd)/X=w_x2/Y=w_base w_x, w_masked
+		Duplicate/free w_x w_x2 // source and destination must be different
+		Interpolate2/T=3/I=3/F=1/S=(bls.sd)/X=w_x2/Y=w_base w_x, w_masked
 		#else
-		Interpolate2 /T=3/I=3/F=1/S=(bls.sd)/X=w_x/Y=w_base w_x, w_masked
+		Interpolate2/T=3/I=3/F=1/S=(bls.sd)/X=w_x/Y=w_base w_x, w_masked
 		#endif
 	else
-		Interpolate2 /T=3/I=3/F=1/S=(bls.sd)/Y=w_base w_masked
+		Interpolate2/T=3/I=3/F=1/S=(bls.sd)/Y=w_base w_masked
 	endif
 end
 
 static function ClearTangentWaves()
-	wave /Z/SDFR=GetDFREF() tangent0, tangent1
-	if (waveexists(tangent0))
+	wave/Z/SDFR=GetPackageDFREF() tangent0, tangent1
+	if (WaveExists(tangent0))
 		FastOp tangent0 = (NaN)
 	endif
-	if (waveexists(tangent1))
+	if (WaveExists(tangent1))
 		FastOp tangent1 = (NaN)
 	endif
 end
 
-static function FitTangent(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave w_mask, wave w_base)
+static function FitTangent(STRUCT BLstruct &bls, wave w_data, wave/Z w_x, wave w_mask, wave w_base)
 	
-	note /K w_base
+	note/K w_base
 	ClearTangentWaves()
 	
 	// make sure we have one or two regions to fit
-	FindLevels /Q/EDGE=1/P w_mask, 1
-	int numRegions = V_LevelsFound + (w_mask[0]==1)	
+	FindLevels/Q/EDGE=1/P w_mask, 1
+	int numRegions = V_LevelsFound + (w_mask[0]==1)
 	if (numRegions<1 || numRegions>2)
 		return 0
 	endif
 	
 	// find the points at edges of fit regions
-	Make /free/N=(2*numRegions) wEdgesP, wEdgesX
+	Make/free/N=(2*numRegions) wEdgesP, wEdgesX
 	
 	variable pnt = 0, j = 0
 	do
@@ -3009,7 +3324,7 @@ static function FitTangent(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave 
 		return 0
 	endif
 	
-	make /free/N=2 wTangentCoef = NaN
+	Make/free/N=2 wTangentCoef = NaN
 	
 	Sort wEdgesP, wEdgesP
 	wEdgesX = (WaveExists(w_x)) ? w_x[wEdgesP] : pnt2x(w_data, wEdgesP)
@@ -3020,25 +3335,24 @@ static function FitTangent(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave 
 	if (numRegions == 2)
 		success = fitCommonTangent(wTangentCoef, wEdgesP, wEdgesX, w_data, w_x, w_base)
 	else // fit horizontal tangent
-		DFREF dfr = GetDFREF()
-		Make /O/N=200 dfr:tangent0 /WAVE=tangent0
-		Make /O/N=200 dfr:tangent1 /WAVE=tangent1
+		DFREF dfr = GetPackageDFREF()
+		Make/O/N=200 dfr:tangent0 /WAVE=tangent0
+		Make/O/N=200 dfr:tangent1 /WAVE=tangent1
 		FastOp tangent1 = (NaN)
 		
-		SetScale /I x, wEdgesX[0], wEdgesX[1], tangent0, tangent1
-//		tangent1 = NaN
-		CurveFit /Q poly 4, w_data[wEdgesP[0],wEdgesP[1]] /X=w_x/NWOK
+		SetScale/I x, wEdgesX[0], wEdgesX[1], tangent0, tangent1
+		CurveFit/Q poly 4, w_data[wEdgesP[0],wEdgesP[1]] /X=w_x/NWOK
 		wave w_coef = w_coef
 		tangent0 = poly(w_coef,x)
 		// differentiate and look for roots in range
-		make /free/D w = {w_coef[1], 2*w_coef[2], 3*w_coef[3]}
-		findroots /Q/P=w
+		Make/free/D w = {w_coef[1], 2*w_coef[2], 3*w_coef[3]}
+		FindRoots/Q/P=w
 		if (!v_flag)
 			wave w_polyroots
 			int i, root
 			variable xmin = min(wEdgesX[0], wEdgesX[1])
 			variable xmax = max(wEdgesX[0], wEdgesX[1])
-			for (i=0;i<dimsize(W_polyRoots, 0);i++)
+			for (i=0;i<DimSize(W_polyRoots, 0);i++)
 				if (imag(w_polyroots[i]))
 					continue
 				endif
@@ -3050,7 +3364,7 @@ static function FitTangent(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave 
 				wTangentCoef[0] = poly(w_coef,root)
 				string strNote = ""
 				sprintf strNote, "contact point=(%g,%g);w_coef={%g,%g};", root, wTangentCoef[0], wTangentCoef[0], wTangentCoef[1]
-				note /K w_base, strNote
+				note/K w_base, strNote
 				success = 1
 				break
 			endfor
@@ -3072,24 +3386,24 @@ static function FitTangent(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave 
 end
 
 // returns 1 for success, puts coefficients for tangent in wTangentCoef, adds note to w_base
-static function FitCommonTangent(wave wTangentCoef, wave wEdgesP, wave wEdgesX, wave w_data, wave /Z w_x, wave w_base)
+static function FitCommonTangent(wave wTangentCoef, wave wEdgesP, wave wEdgesX, wave w_data, wave/Z w_x, wave w_base)
 	
-	DFREF dfr = GetDFREF()
-	Make /D/free/N=9 w_9coef = 0
+	DFREF dfr = GetPackageDFREF()
+	Make/D/free/N=9 w_9coef = 0
 	// w_9coef[0,3],[4,7] are coefficients for first and second poly, respectively
-	Make /O/N=200 dfr:tangent0 /WAVE=tangent0
-	Make /O/N=200 dfr:tangent1 /WAVE=tangent1
-	SetScale /I x, wEdgesX[0], wEdgesX[1], tangent0
-	SetScale /I x, wEdgesX[2], wEdgesX[3], tangent1
+	Make/O/N=200 dfr:tangent0 /WAVE=tangent0
+	Make/O/N=200 dfr:tangent1 /WAVE=tangent1
+	SetScale/I x, wEdgesX[0], wEdgesX[1], tangent0
+	SetScale/I x, wEdgesX[2], wEdgesX[3], tangent1
 	
 	variable V_FitError = 0
-	CurveFit /Q poly 4, w_data[wEdgesP[0],wEdgesP[1]] /X=w_x/NWOK
+	CurveFit/Q poly 4, w_data[wEdgesP[0],wEdgesP[1]] /X=w_x/NWOK
 	wave w_coef = w_coef
 	tangent0 = poly(w_coef,x)
 	w_9coef[0,3] = w_coef
 	
 	V_FitError = 0
-	CurveFit /Q poly 4, w_data[wEdgesP[2],wEdgesP[3]] /X=w_x/NWOK
+	CurveFit/Q poly 4, w_data[wEdgesP[2],wEdgesP[3]] /X=w_x/NWOK
 	w_9coef[4,7] = w_coef[p-4]
 	tangent1 = poly(w_coef,x)
 	
@@ -3098,8 +3412,8 @@ static function FitCommonTangent(wave wTangentCoef, wave wEdgesP, wave wEdgesX, 
 	w_9coef[8] = (wEdgesX[2] + wEdgesX[3]) / 2
 	
 	int pnts = 300
-	Make /free/N=(pnts) w_deltaY
-	SetScale /I x, wEdgesX[0], wEdgesX[1], w_deltaY
+	Make/free/N=(pnts) w_deltaY
+	SetScale/I x, wEdgesX[0], wEdgesX[1], w_deltaY
 	w_deltaY = TangentDistance(w_9coef, x)
 	
 	variable xmin = min(wEdgesX[0], wEdgesX[1])
@@ -3108,11 +3422,11 @@ static function FitCommonTangent(wave wTangentCoef, wave wEdgesP, wave wEdgesX, 
 	variable crossing1 = NaN, crossing2 = NaN
 	variable crossingX
 		
-	FindLevel /Q/R=(xmid, xmax), w_deltaY, 0
+	FindLevel/Q/R=(xmid, xmax), w_deltaY, 0
 	if (V_flag == 0)
 		crossing1 = V_LevelX
 	endif
-	FindLevel /Q/R=(xmid, xmin), w_deltaY, 0
+	FindLevel/Q/R=(xmid, xmin), w_deltaY, 0
 	if (V_flag == 0)
 		crossing2 = V_LevelX
 	endif
@@ -3130,7 +3444,7 @@ static function FitCommonTangent(wave wTangentCoef, wave wEdgesP, wave wEdgesX, 
 	endif
 				
 	variable delta = 2 * abs(deltax(w_deltaY))
-	FindRoots /H=(crossingX+delta)/L=(crossingX-delta)/Q baselines#TangentDistance, w_9coef
+	FindRoots/H=(crossingX+delta)/L=(crossingX-delta)/Q baselines#TangentDistance, w_9coef
 	if (V_flag)
 		wTangentCoef = {NaN, NaN}
 		return 0
@@ -3169,10 +3483,10 @@ static function FitCommonTangent(wave wTangentCoef, wave wEdgesP, wave wEdgesX, 
 	
 	string strNote = ""
 	sprintf strNote, "contact points=(%g,%g),(%g,%g);w_coef={%g,%g};", x1, y1, x2, y2, intercept, grad
-	note /K w_base, strNote
+	note/K w_base, strNote
 	
 	wTangentCoef = {intercept, grad}
-	return 1	
+	return 1
 end
 
 // for finding tangent to two 3rd degree polynomials
@@ -3197,6 +3511,7 @@ static function TangentDistance(wave w, variable x)
 	
 	root1 = (-b + sqrt(b^2-4*a*c)) / (2*a)
 	root2 = (-b - sqrt(b^2-4*a*c)) / (2*a)
+	// FindRoots/P (Jenkins-Traub) would be more robust, but this works tolerably.
 	
 	variable x0, y0
 	
@@ -3209,11 +3524,11 @@ static function TangentDistance(wave w, variable x)
 end
 
 static function ClearMarquee(STRUCT BLstruct &bls)
-	SetMarquee /W=$bls.graph 0, 0, 0, 0
+	SetMarquee/W=$bls.graph 0, 0, 0, 0
 	MarqueeEvent(bls) // clear buttons, setvars, roi
 end
 
-// graphwaveedit swallows the mousemoved events
+// GraphWaveEdit swallows the mousemoved events
 static function HookSpline(STRUCT WMWinHookStruct &s)
 	if (s.eventCode == 4) // mousemoved
 		int v_key = GetKeyState(0)
@@ -3232,7 +3547,7 @@ static function HookSpline(STRUCT WMWinHookStruct &s)
 	return 0
 end
 
-static function HookBaselines(STRUCT WMWinHookStruct &s)	
+static function HookBaselines(STRUCT WMWinHookStruct &s)
 	
 	if (s.eventCode < 5)
 		return 0
@@ -3243,7 +3558,7 @@ static function HookBaselines(STRUCT WMWinHookStruct &s)
 	endif
 	
 	STRUCT BLstruct bls
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	StructGet bls dfr:w_struct
 	
 	if (cmpstr(bls.graph, s.winName))
@@ -3274,7 +3589,7 @@ static function HookBaselines(STRUCT WMWinHookStruct &s)
 				if (MaskAddOrRemoveSelection(s.keycode == bls.keyplus))
 					return 1
 				endif
-			endif			
+			endif
 			// maybe one day we will be able to use this
 //			if (bls.tab == 3 && s.keycode == 32)
 //				bls.editmode = !bls.editmode
@@ -3296,15 +3611,15 @@ end
 static function MarqueeEvent(STRUCT BLstruct &bls)
 	
 	if (bls.datalength==0 || bls.tab!=0)
-		KillControl /W=$bls.Graph btnAdd_graph
-		KillControl /W=$bls.Graph btnRemove_graph
+		KillControl/W=$bls.Graph btnAdd_graph
+		KillControl/W=$bls.Graph btnRemove_graph
 		return 0
 	endif
 				
 	string panelStr = bls.graph + "#BL_panel"
 	string s_Xax = StringByKey("XAXIS", TraceInfo(bls.graph, bls.trace, 0))
 	string s_Yax = StringByKey("YAXIS", TraceInfo(bls.graph, bls.trace, 0))
-	GetMarquee /W=$bls.graph/Z $s_Xax, $s_Yax
+	GetMarquee/W=$bls.graph/Z $s_Xax, $s_Yax
 	if (V_flag == 0) // no marquee
 		SetVariable svL_tab0, win=$panelStr, value=_STR:""
 		SetVariable svR_tab0, win=$panelStr, value=_STR:""
@@ -3312,8 +3627,8 @@ static function MarqueeEvent(STRUCT BLstruct &bls)
 		bls.roi.right  = NaN
 		bls.roi.top    = NaN
 		bls.roi.bottom = NaN
-		KillControl /W=$bls.Graph btnAdd_graph
-		KillControl /W=$bls.Graph btnRemove_graph
+		KillControl/W=$bls.Graph btnAdd_graph
+		KillControl/W=$bls.Graph btnRemove_graph
 	else
 		SetVariable svL_tab0, win=$panelStr, value=_STR:num2str(v_left)
 		SetVariable svR_tab0, win=$panelStr, value=_STR:num2str(v_right)
@@ -3323,10 +3638,10 @@ static function MarqueeEvent(STRUCT BLstruct &bls)
 		bls.roi.bottom = v_bottom
 		
 		// create buttons
-		GetMarquee /W=$bls.graph/Z // units are points
+		GetMarquee/W=$bls.graph/Z // units are points
 		SetMarqueeButtons(bls, V_left, V_top, V_right, V_bottom)
 	endif
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	StructPut bls dfr:w_struct
 
 	return 0
@@ -3405,31 +3720,31 @@ static function RepositionCursors(STRUCT BLstruct &bls)
 	if (bls.tab == 1)
 		// poly >=3 coefficients
 		if (numCursors>2 && numtype(bls.csr.I.x)==0 && numtype(bls.csr.I.y)==0)
-			Cursor /F/W=$bls.graph/N=1 I $bls.trace bls.csr.I.x, bls.csr.I.y
+			Cursor/F/W=$bls.graph/N=1 I $bls.trace bls.csr.I.x, bls.csr.I.y
 		endif
 		// poly >=4 coefficients
 		if (numCursors>3 && numtype(bls.csr.J.x)==0 && numtype(bls.csr.J.y)==0)
-			Cursor /F/W=$bls.graph/N=1 J $bls.trace bls.csr.J.x, bls.csr.J.y
+			Cursor/F/W=$bls.graph/N=1 J $bls.trace bls.csr.J.x, bls.csr.J.y
 		endif
 		// poly 5
 		if (numCursors>4 && numtype(bls.csr.F.x)==0 && numtype(bls.csr.F.y)==0)
-			Cursor /F/W=$bls.graph/N=1 F $bls.trace bls.csr.F.x, bls.csr.F.y
+			Cursor/F/W=$bls.graph/N=1 F $bls.trace bls.csr.F.x, bls.csr.F.y
 		endif
 		// all types > 0 require >= 2 cursors
 		if (numCursors>1 && numtype(bls.csr.H.x)==0 && numtype(bls.csr.H.y)==0)
-			Cursor /F/W=$bls.graph/N=1 H $bls.trace bls.csr.H.x, bls.csr.H.y
+			Cursor/F/W=$bls.graph/N=1 H $bls.trace bls.csr.H.x, bls.csr.H.y
 		endif
 		if (numtype(bls.csr.G.x)==0 && numtype(bls.csr.G.y)==0)
-			Cursor /F/W=$bls.graph/N=1 G $bls.trace bls.csr.G.x, bls.csr.G.y
+			Cursor/F/W=$bls.graph/N=1 G $bls.trace bls.csr.G.x, bls.csr.G.y
 		endif
 	endif
 	
 	if (bls.subrange)
 		if (numtype(bls.csr.C.x) == 0)
-			Cursor /F/W=$bls.graph/N=1 C $bls.trace bls.csr.C.x, 0
+			Cursor/F/W=$bls.graph/N=1 C $bls.trace bls.csr.C.x, 0
 		endif
 		if (numtype(bls.csr.D.x) == 0)
-			Cursor /F/W=$bls.graph/N=1 D $bls.trace bls.csr.D.x, 0
+			Cursor/F/W=$bls.graph/N=1 D $bls.trace bls.csr.D.x, 0
 		endif
 	endif
 end
@@ -3447,7 +3762,7 @@ static function ClickEvent(STRUCT BLstruct &bls, STRUCT WMWinHookStruct &s)
 		return 0
 	endif
 	
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	
 	int controlkey = 16, shiftkey = 4
 	#ifdef WINDOWS
@@ -3460,7 +3775,7 @@ static function ClickEvent(STRUCT BLstruct &bls, STRUCT WMWinHookStruct &s)
 		StructPut bls dfr:w_struct
 		return 0
 	elseif (bls.editmode && (v_key & controlkey)) // add a node
-		wave /SDFR=dfr w_nodesY, w_nodesX
+		wave/SDFR=dfr w_nodesY, w_nodesX
 		string infoStr = TraceInfo(bls.graph, bls.trace, 0)
 		string xAxisName = StringByKey("XAXIS", infoStr)
 		string yAxisName = StringByKey("YAXIS", infoStr)
@@ -3483,7 +3798,7 @@ static function PadSubrange(STRUCT BLstruct &bls, wave w_data, wave w_base)
 	if (!bls.subrange)
 		return 0
 	endif
-	wave /Z bl = GetBLWave(bls)
+	wave/Z bl = GetBLWave(bls)
 	if (WaveExists(bl)) // an output wave exists
 		if (bls.endp[0] == bls.endp[1])
 			w_base = bl
@@ -3517,7 +3832,7 @@ end
 // avoiding poly and Gauss1D functions improves speed
 // set dofit=0 to make the wave assignment using values from global coefficient wave w_coef
 static function FitFuncs(STRUCT BLstruct &bls,
-	wave /Z w_data, wave /Z w_x, wave /Z w_mask, wave w_base,
+	wave/Z w_data, wave/Z w_x, wave/Z w_mask, wave w_base,
 	[int dofit])
 	
 	variable V_FitError = 0, V_fitOptions = 4
@@ -3530,10 +3845,10 @@ static function FitFuncs(STRUCT BLstruct &bls,
 			case "constant":
 				if (dofit)
 					// first fit a line to populate w_coef
-					CurveFit /Q/N line, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N line, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					w_coef[1] = 0
-					CurveFit /Q/N/H="01" line, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N/H="01" line, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 				endif
 				// the wave assignment
 				FastOp w_base = (w_coef[0])
@@ -3541,7 +3856,7 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "line":
 				if (dofit)
-					CurveFit /Q/N line, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N line, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 				endif
 				
@@ -3555,7 +3870,7 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "poly":
 				if (dofit)
-					CurveFit /Q/N poly bls.polyorder, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N poly bls.polyorder, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3572,11 +3887,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "gauss":
 				if (dofit)
-					CurveFit /Q/N Gauss, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N Gauss, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="1000" Gauss, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="1000" Gauss, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3594,11 +3909,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "lor":
 				if (dofit)
-					CurveFit /Q/N lor, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N lor, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="1000" lor, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="1000" lor, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3616,11 +3931,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 			#if IgorVersion() >= 9
 			case "voigt":
 				if (dofit)
-					CurveFit /Q/N voigt, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N voigt, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="10000" voigt, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="10000" voigt, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3637,11 +3952,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "dblexp_peak":
 				if (dofit)
-					CurveFit /Q/N dblexp_peak, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N dblexp_peak, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="10000" dblexp_peak, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="10000" dblexp_peak, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3659,11 +3974,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 			#endif
 			case "exp":
 				if (dofit)
-					CurveFit /Q/N exp, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N exp, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="100" exp, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="100" exp, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3680,11 +3995,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "dblexp":
 				if (dofit)
-					CurveFit /Q/N dblexp, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N dblexp, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="10000" exp, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="10000" exp, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3701,11 +4016,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "sin":
 				if (dofit)
-					CurveFit /Q/N sin, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N sin, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="1000" sin, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="1000" sin, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3722,11 +4037,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "hillequation":
 				if (dofit)
-					CurveFit /Q/N hillequation, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N hillequation, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="1000" hillequation, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="1000" hillequation, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3743,11 +4058,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "sigmoid":
 				if (dofit)
-					CurveFit /Q/N sigmoid, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N sigmoid, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="1000" sigmoid, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="1000" sigmoid, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3764,11 +4079,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 				break
 			case "power":
 				if (dofit)
-					CurveFit /Q/N power, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N power, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="100" power, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="100" power, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3786,11 +4101,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 			#if IgorVersion() >= 9
 			case "log":
 				if (dofit)
-					CurveFit /Q/N log, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N log, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="10" log, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="10" log, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3808,11 +4123,11 @@ static function FitFuncs(STRUCT BLstruct &bls,
 			#endif
 			case "lognormal":
 				if (dofit)
-					CurveFit /Q/N lognormal, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					CurveFit/Q/N lognormal, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					wave w_coef
 					if (bls.peak)
 						w_coef[0] = bls.base
-						CurveFit /Q/N/H="1000" lognormal, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+						CurveFit/Q/N/H="1000" lognormal, kwCWave=w_coef, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
 					endif
 				endif
 				if (bls.datalength > kMultithreadCutoff)
@@ -3827,19 +4142,95 @@ static function FitFuncs(STRUCT BLstruct &bls,
 					w_base = w_coef[0] + w_coef[1]*exp(-(ln(x/w_coef[2])/w_coef[3])^2)
 				endif
 				break
-			default:			
-				if (cmpstr(bls.fitfunc, UserFitName()))
+				
+			case "Planck":
+				if (dofit)
+					CurveFit/Q/N Gauss, w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					wave w_coef
+					W_coef = {5000,(w_coef[0]+w_coef[1])/3e13}
+					
+					// FuncFit won't work with the funcref
+					switch (bls.wavelength)
+						case 2:
+							FuncFit/Q/N baselines#PlanckmuM w_coef w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+							break
+						case 3:
+							FuncFit/Q/N baselines#PlanckWN w_coef w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+							break
+						case 4:
+							FuncFit/Q/N baselines#PlanckAngstrom w_coef w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+							break
+						default:
+							FuncFit/Q/N baselines#Planck w_coef w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					endswitch
+				endif
+				if (bls.datalength > kMultithreadCutoff)
+					if (WaveExists(w_x))
+						multithread w_base = planck(w_coef, wl2nm(bls, w_x))
+					else
+						multithread w_base = planck(w_coef, wl2nm(bls, x))
+					endif
+				elseif (WaveExists(w_x))
+					w_base = planck(w_coef, wl2nm(bls, w_x))
+				else
+					w_base = planck(w_coef, wl2nm(bls, x))
+				endif
+				break
+			case "spline":
+				
+				if (bls.datalength < 4)
+					FastOp w_base = (NaN)
 					return 0
 				endif
-				if (dofit)
-					UserInitialGuess()
-					wave w_coef
-					FuncFit /Q/N baselines#UserFunc w_coef w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
-				endif
+											
 				if (WaveExists(w_x))
-					w_base = UserFunc(W_coef, w_x)
+					#if (IgorVersion() < 9)
+					Duplicate/free w_x w_x2 // source and destination must be different
+					Interpolate2/T=3/I=3/F=1/S=(bls.sd)/X=w_x2/Y=w_base w_x, w_data; AbortOnRTE
+					#else
+					Interpolate2/T=3/I=3/F=1/S=(bls.sd)/X=w_x/Y=w_base w_x, w_data; AbortOnRTE
+					#endif
 				else
-					w_base = UserFunc(W_coef, x)
+					Interpolate2/T=3/I=3/F=1/S=(bls.sd)/Y=w_base w_data; AbortOnRTE
+				endif
+				break				
+			default:
+				
+				int AllAtOnce = 0
+				
+				FUNCREF BaselineGuessPrototype GuessFunc = $bls.fitfunc+"Guess"
+				if (NumberByKey("ISPROTO", FuncRefInfo(GuessFunc)))
+					return 0
+				endif
+				
+				FUNCREF BaselineFitPrototype FitFunc = $bls.FitFunc
+				if (NumberByKey("ISPROTO", FuncRefInfo(FitFunc)))
+					
+					// check for All At Once fit function
+					FUNCREF BaselineFitAAWPrototype FitFuncAAW = $bls.FitFunc
+					if (NumberByKey("ISPROTO", FuncRefInfo(FitFuncAAW)))
+						return 0
+					else
+						AllAtOnce = 1
+					endif
+				endif
+				
+				if (dofit)
+					GuessFunc(w_data, w_x, w_mask)
+					wave w_coef
+					if (AllAtOnce)
+						FuncFit/Q/N FitFuncAAW w_coef w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					else
+						FuncFit/Q/N FitFunc w_coef w_data /M=w_mask/X=w_x/NWOK; AbortOnRTE
+					endif
+				endif
+				
+				if (AllAtOnce)
+					FitFuncAAW(W_coef, w_base, w_x)
+				elseif (WaveExists(w_x))
+					w_base = FitFunc(W_coef, w_x)
+				else
+					w_base = FitFunc(W_coef, x)
 				endif
 				break
 		endswitch
@@ -3850,18 +4241,18 @@ static function FitFuncs(STRUCT BLstruct &bls,
 			#ifdef debug
 			Print "Error during curve fit:", GetErrMessage(CFerror)
 			#endif
-			w_base = NaN
+			FastOp w_base = (NaN)
 		endif
 	endtry
 	
-	return (V_FitError	==0)
+	return (V_FitError == 0)
 end
 
 // this is inefficient for a wave assignment, but useful if you need just a few values
 // no check for inappropriate funtion!
 static function GetFitValue(STRUCT BLstruct &bls, variable x)
 
-	wave /Z w_coef
+	wave/Z w_coef
 	if (!WaveExists(w_coef))
 		return NaN
 	endif
@@ -3877,14 +4268,16 @@ static function GetFitValue(STRUCT BLstruct &bls, variable x)
 			return w_coef[0] + w_coef[1]*exp(-((x - w_coef[2])/w_coef[3])^2)
 		case "lor":
 			return w_coef[0] + w_coef[1]/((x-w_coef[2])^2 + w_coef[3])
+		#if IgorVersion() >= 8
 		case "voigt":
 			return VoigtPeak(w_coef, x)
+		#endif
 		case "exp":
 			return w_coef[0] + w_coef[1]*exp(-w_coef[2]*x)
 		case "dblexp":
 			return w_coef[0] + w_coef[1]*exp(-w_coef[2]*x) + w_coef[3]*exp(-w_coef[4]*x)
 		case "dblexp_peak":
-			return W_coef[0] + w_coef[1]*(-exp(-(x-w_coef[4])/w_coef[2]) + exp(-(x-w_coef[4])/w_coef[3]))	
+			return W_coef[0] + w_coef[1]*(-exp(-(x-w_coef[4])/w_coef[2]) + exp(-(x-w_coef[4])/w_coef[3]))
 		case "sin":
 			return w_coef[0] + w_coef[1]*sin(w_coef[2]*x + w_coef[3])
 		case "hillequation":
@@ -3898,14 +4291,17 @@ static function GetFitValue(STRUCT BLstruct &bls, variable x)
 		case "lognormal":
 			return w_coef[0] + w_coef[1]*exp(-(ln(x/w_coef[2])/w_coef[3])^2)
 		default:
-			if (cmpstr(bls.fitfunc, UserFitName()) == 0)
-				return UserFunc(W_coef, x)
-			endif	
+
+			FUNCREF BaselineFitPrototype FitFunc = $bls.FitFunc
+			if (NumberByKey("ISPROTO", FuncRefInfo(FitFunc)) == 0)
+				return FitFunc(W_coef, x)
+			endif
+			
 			// if w_base has been assigned, maybe we can grab a value from there
-			wave /SDFR=GetDFREF() w_base
-			wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+			wave/SDFR=GetPackageDFREF() w_base
+			wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 			return GetYfromWavePair(x, w_base, w_x) // defaults to w_base(x)
-	endswitch	
+	endswitch
 end
 
 // Plots w, optionally vs w_x, on the same axes as the already plotted
@@ -3921,7 +4317,7 @@ end
 // replace = 1 removes tracestr after plotting w
 static function AppendToSameAxes(graphStr, traceStr, w, w_x, [w_rgb, matchOffset, offset, matchRGB, fill, lsize, unique, replace])
 	string graphStr, traceStr
-	wave /Z w, w_x, w_rgb
+	wave/Z w, w_x, w_rgb
 	variable matchOffset, offset // match y offset, set Y offset
 	int matchRGB // match color of already plotted trace
 	variable fill // opacity for fill to zero
@@ -3951,7 +4347,7 @@ static function AppendToSameAxes(graphStr, traceStr, w, w_x, [w_rgb, matchOffset
 	if (matchRGB==0 && ParamIsDefault(w_rgb)) // no color specified
 		wave w_rgb = ContrastingColor({c0,c1,c2})
 	elseif (matchRGB) // this overides any specified color
-		Make /free/O w_rgb = {c0,c1,c2}
+		Make/free/O w_rgb = {c0,c1,c2}
 	endif
 	
 	int i, numTraces
@@ -3960,9 +4356,9 @@ static function AppendToSameAxes(graphStr, traceStr, w, w_x, [w_rgb, matchOffset
 		traces = TraceNameList(graphStr,";",1)
 		for (i=ItemsInList(traces)-1;i>=0;i-=1)
 			trace = StringFromList(i,traces)
-			wave /Z ithTraceWave = TraceNameToWaveRef(graphStr, trace)
+			wave/Z ithTraceWave = TraceNameToWaveRef(graphStr, trace)
 			if (WaveRefsEqual(ithTraceWave, w))
-				RemoveFromGraph /W=$graphStr/Z $trace
+				RemoveFromGraph/W=$graphStr/Z $trace
 			endif
 		endfor
 	endif
@@ -3970,38 +4366,38 @@ static function AppendToSameAxes(graphStr, traceStr, w, w_x, [w_rgb, matchOffset
 	switch (flagBits)
 		case 0:
 			if (WaveExists(w_x))
-				AppendToGraph /W=$graphStr/B=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w vs w_x
+				AppendToGraph/W=$graphStr/B=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w vs w_x
 			elseif (DimSize(w,1)==2)
-				AppendToGraph /W=$graphStr/B=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w[][1] vs w[][0]
+				AppendToGraph/W=$graphStr/B=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w[][1] vs w[][0]
 			else
-				AppendToGraph /W=$graphStr/B=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w
+				AppendToGraph/W=$graphStr/B=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w
 			endif
 			break
 		case 1:
 			if (WaveExists(w_x))
-				AppendToGraph /W=$graphStr/B=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w vs w_x
+				AppendToGraph/W=$graphStr/B=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w vs w_x
 			elseif (DimSize(w,1)==2)
-				AppendToGraph /W=$graphStr/B=$s_Xax/R=$s_Yax /C=(w_rgb[0],w_rgb[1],w_rgb[2]) w[][1] vs w[][0]
+				AppendToGraph/W=$graphStr/B=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w[][1] vs w[][0]
 			else
-				AppendToGraph /W=$graphStr/B=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w
+				AppendToGraph/W=$graphStr/B=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w
 			endif
 			break
 		case 2:
 			if (WaveExists(w_x))
-				AppendToGraph /W=$graphStr/T=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w vs w_x
+				AppendToGraph/W=$graphStr/T=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w vs w_x
 			elseif (DimSize(w,1)==2)
-				AppendToGraph /W=$graphStr/T=$s_Xax/L=$s_Yax /C=(w_rgb[0],w_rgb[1],w_rgb[2]) w[][1] vs w[][0]
+				AppendToGraph/W=$graphStr/T=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w[][1] vs w[][0]
 			else
-				AppendToGraph /W=$graphStr/T=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w
+				AppendToGraph/W=$graphStr/T=$s_Xax/L=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w
 			endif
 			break
 		case 3:
 			if (WaveExists(w_x))
-				AppendToGraph /W=$graphStr/T=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w vs w_x
+				AppendToGraph/W=$graphStr/T=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w vs w_x
 			elseif (DimSize(w,1)==2)
-				AppendToGraph /W=$graphStr/T=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w[][1] vs w[][0]
+				AppendToGraph/W=$graphStr/T=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w[][1] vs w[][0]
 			else
-				AppendToGraph /W=$graphStr/T=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w
+				AppendToGraph/W=$graphStr/T=$s_Xax/R=$s_Yax/C=(w_rgb[0],w_rgb[1],w_rgb[2]) w
 			endif
 			break
 	endswitch
@@ -4010,17 +4406,17 @@ static function AppendToSameAxes(graphStr, traceStr, w, w_x, [w_rgb, matchOffset
 	string strNewTrace = TraceNameList(graphStr, ";", 1)
 	strNewTrace = StringFromList(ItemsInList(strNewTrace)-1, strNewTrace)
 	
-	ModifyGraph /W=$graphStr offset($strNewTrace)={0,offset}, lsize($strNewTrace)=lsize
+	ModifyGraph/W=$graphStr offset($strNewTrace)={0,offset}, lsize($strNewTrace)=lsize
 	
 	if (fill > 0)
-		ModifyGraph /W=$graphStr mode($strNewTrace)=7, hbFill($strNewTrace)=2
-		ModifyGraph /W=$graphStr usePlusRGB($strNewTrace)=1, plusRGB($strNewTrace)=(w_rgb[0],w_rgb[1],w_rgb[2],fill*65535)
-		ModifyGraph /W=$graphStr useNegRGB($strNewTrace)=1, negRGB($strNewTrace)=(w_rgb[0],w_rgb[1],w_rgb[2],fill*65535)
-		ReorderTraces /W=$graphStr _back_, {$strNewTrace}
+		ModifyGraph/W=$graphStr mode($strNewTrace)=7, hbFill($strNewTrace)=2
+		ModifyGraph/W=$graphStr usePlusRGB($strNewTrace)=1, plusRGB($strNewTrace)=(w_rgb[0],w_rgb[1],w_rgb[2],fill*65535)
+		ModifyGraph/W=$graphStr useNegRGB($strNewTrace)=1, negRGB($strNewTrace)=(w_rgb[0],w_rgb[1],w_rgb[2],fill*65535)
+		ReorderTraces/W=$graphStr _back_, {$strNewTrace}
 	endif
 	
 	if (replace)
-		RemoveFromGraph /W=$graphStr traceStr
+		RemoveFromGraph/W=$graphStr traceStr
 	endif
 end
 
@@ -4039,13 +4435,13 @@ static function MakeSpectrum([int n, int points])
 	variable numPeaks = 5 // number of Gaussian peaks in the spectrum
 	string strName
 	variable a, b, c, d, i, j, height, position, width
-	Make /free/T colornames = {"red", "green", "blue", "maroon", "teal"}
+	Make/free/T colornames = {"red", "green", "blue", "maroon", "teal"}
 
-	Display /K=1
+	Display/K=1
 	for(i=0;i<n;i+=1)
 		strName = UniqueName("foo", 1, 0)
-		Make /N=(points) $(UniqueName("foo", 1, 0)) /WAVE=foo
-		SetScale /i x, 0, 1000, foo
+		Make/N=(points) $(UniqueName("foo", 1, 0)) /WAVE=foo
+		SetScale/I x, 0, 1000, foo
 		a = enoise(5); b = enoise(1e-3); c = enoise(1e-5); d = enoise(400)
 		foo = gnoise(0.1) + a + b * x + c * (x - d)^2
 		for(j=0;j<numPeaks;j+=1)
@@ -4055,7 +4451,7 @@ static function MakeSpectrum([int n, int points])
 			foo += height * Gauss(x, position, width/sqrt(2))
 		endfor
 		wave color = ColorWave(colornames[mod(i,5)])
-		AppendToGraph /C=(color[0],color[1],color[2]) foo
+		AppendToGraph/C=(color[0],color[1],color[2]) foo
 	endfor
 end
 
@@ -4069,19 +4465,19 @@ static function ResetColors(STRUCT BLstruct &bls, int status)
 		return 0
 	endif
 		
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	string traceStr = bls.trace
 	int i, numTraces
 		
 	if (status == 0) // reset to saved
-		wave /Z/T w_traces = dfr:w_traces
-		wave /Z w_colors = dfr:w_colors
+		wave/Z/T w_traces = dfr:w_traces
+		wave/Z w_colors = dfr:w_colors
 		if (WaveExists(w_colors)==0)
 			return 0
 		endif
 		numTraces = numpnts(w_traces)
 		for(i=0;i<numTraces;i+=1)
-			ModifyGraph /W=$bls.graph/Z rgb($w_traces[i])=(w_colors[i][0],w_colors[i][1],w_colors[i][2])
+			ModifyGraph/W=$bls.graph/Z rgb($w_traces[i])=(w_colors[i][0],w_colors[i][1],w_colors[i][2])
 		endfor
 		return 1
 	endif
@@ -4091,11 +4487,11 @@ static function ResetColors(STRUCT BLstruct &bls, int status)
 	endif
 		
 	if (status & 2) // save current
-		Make /O/N=0/T dfr:w_traces /wave=w_traces
-		Make /O/N=(0,3) dfr:w_colors /wave=w_colors
+		Make/O/N=0/T dfr:w_traces /wave=w_traces
+		Make/O/N=(0,3) dfr:w_colors /wave=w_colors
 	else
-		wave /Z/T w_traces = dfr:w_traces
-		wave /Z w_colors = dfr:w_colors
+		wave/Z/T w_traces = dfr:w_traces
+		wave/Z w_colors = dfr:w_colors
 	endif
 	
 	string traceListStr = TraceNameList(bls.graph, ";", 1+4)
@@ -4107,9 +4503,9 @@ static function ResetColors(STRUCT BLstruct &bls, int status)
 			w_traces[i] = {traceStr}
 			wave w_rgb = GetTraceColor(bls.graph, traceStr)
 			w_colors[i][]={{w_rgb[0]},{w_rgb[1]},{w_rgb[2]}}
-		elseif (WaveExists(w_traces)) 
+		elseif (WaveExists(w_traces))
 			// check to see if a trace has been added since the list was created
-			FindValue /TEXT=traceStr/TXOP=4/Z w_traces
+			FindValue/TEXT=traceStr/TXOP=4/Z w_traces
 			if (V_Value == -1)
 				w_traces[numpnts(w_traces)]={traceStr}
 				wave w_rgb = GetTraceColor(bls.graph, traceStr)
@@ -4117,7 +4513,7 @@ static function ResetColors(STRUCT BLstruct &bls, int status)
 			endif
 		endif
 		if (status & 1) // set to grey
-			ModifyGraph /W=$bls.graph/Z rgb($traceStr)=(wGrey[0],wGrey[1],wGrey[2])		
+			ModifyGraph/W=$bls.graph/Z rgb($traceStr)=(wGrey[0],wGrey[1],wGrey[2])
 		endif
 	endfor
 end
@@ -4129,12 +4525,12 @@ static function RestoreTraceColor(STRUCT BLstruct &bls)
 		return 0
 	endif
 	
-	DFREF dfr = GetDFREF()
-	wave /T/Z w_traces = dfr:w_traces
-	wave /Z w_colors = dfr:w_colors
+	DFREF dfr = GetPackageDFREF()
+	wave/T/Z w_traces = dfr:w_traces
+	wave/Z w_colors = dfr:w_colors
 	wave rgb = ColorWave("plum")
 	
-	FindValue /TEXT=bls.trace/Z w_traces
+	FindValue/TEXT=bls.trace/Z w_traces
 	if (V_value > -1)
 		wave w = ColorWave("grey")
 		w = abs(w - w_colors[V_Value][p])
@@ -4142,10 +4538,10 @@ static function RestoreTraceColor(STRUCT BLstruct &bls)
 			rgb = w_colors[V_value][p]
 		endif
 	endif
-	ModifyGraph /W=$bls.graph/Z rgb($bls.trace)=(rgb[0],rgb[1],rgb[2])
+	ModifyGraph/W=$bls.graph/Z rgb($bls.trace)=(rgb[0],rgb[1],rgb[2])
 end
 
-static function /WAVE GetTraceColor(string graphStr, string traceStr)
+static function/WAVE GetTraceColor(string graphStr, string traceStr)
 	variable c0, c1, c2
 	string infoStr = TraceInfo(graphStr, traceStr, 0)
 	variable startIndex = strsearch(infoStr, ";rgb(x)=", 0)
@@ -4153,13 +4549,13 @@ static function /WAVE GetTraceColor(string graphStr, string traceStr)
 		return $"{}"
 	endif
 	sscanf infoStr[startIndex,strlen(infoStr)-1], ";rgb(x)=(%d,%d,%d*", c0, c1, c2
-	Make /I/U/free w_rgb={c0,c1,c2}
+	Make/I/U/free w_rgb={c0,c1,c2}
 	return w_rgb
 end
 
 // default colors are defined here
-static function /WAVE ColorWave(string color)
-	Make /I/U/free w = {0x0000,0x0000,0x0000}
+static function/WAVE ColorWave(string color)
+	Make/I/U/free w = {0x0000,0x0000,0x0000}
 	strswitch (color)
 		case "red" :
 			w = {0xFFFF,0x0000,0x0000}
@@ -4211,7 +4607,7 @@ static function /WAVE ColorWave(string color)
 	return w
 end
 
-static function /wave ContrastingColor(wave RGB)
+static function/wave ContrastingColor(wave RGB)
 	wave hsl = RGB2HSL(rgb)
 	if (hsl[1] < 0.3) // low saturation, make it red
 		return ColorWave("red")
@@ -4236,7 +4632,7 @@ static function /wave ContrastingColor(wave RGB)
 end
 
 // select a color midway between the hues of trace and baseline
-static function /wave ChooseCursorColor(STRUCT BLstruct &bls)
+static function/wave ChooseCursorColor(STRUCT BLstruct &bls)
 	wave hsl = RGB2HSL(GetTraceColor(bls.graph, bls.trace))
 	if (HSL[2] > 0.5) // high luminosity, make it black
 		return ColorWave("black")
@@ -4263,8 +4659,8 @@ static function /wave ChooseCursorColor(STRUCT BLstruct &bls)
 end
 
 // converts 16 bit sRGB to HSL
-static function /WAVE RGB2HSL(wave rgbInt)
-	Make /free/N=3 hsl, rgb, rgbDelta
+static function/WAVE RGB2HSL(wave rgbInt)
+	Make/free/N=3 hsl, rgb, rgbDelta
 	rgb = rgbInt / 0xFFFF
 	variable rgbMin = WaveMin(rgb)
 	variable rgbMax = WaveMax(rgb)
@@ -4299,22 +4695,22 @@ static function SetEditMode(STRUCT BLstruct &bls)
 		if (strlen(strYax) == 0)
 			bls.editmode = 0
 			SetEditMode(bls)
-			DFREF dfr = GetDFREF()
+			DFREF dfr = GetPackageDFREF()
 			StructPut bls dfr:w_struct
 			return 0
 		endif
 		
-		GetAxis /W=$bls.graph/Q $strYax
-		SetAxis /W=$bls.graph $strYax, V_min, V_max
-		ModifyGraph /Z/W=$bls.graph mode(w_nodesY)=3, marker(w_nodesY)=11
-		GraphWaveEdit /W=$bls.graph/NI/T=1/M $"w_nodesY"
+		GetAxis/W=$bls.graph/Q $strYax
+		SetAxis/W=$bls.graph $strYax, V_min, V_max
+		ModifyGraph/Z/W=$bls.graph mode(w_nodesY)=3, marker(w_nodesY)=11
+		GraphWaveEdit/W=$bls.graph/NI/T=1/M $"w_nodesY"
 	else
-		GraphNormal /W=$bls.graph
-		ModifyGraph /Z/W=$bls.graph mode(w_nodesY)=2
+		GraphNormal/W=$bls.graph
+		ModifyGraph/Z/W=$bls.graph mode(w_nodesY)=2
 	endif
 	CheckBox chkEdit_tab3 win=$bls.graph+"#BL_panel", value=bls.editmode
 	
-	ControlInfo /W=$bls.Graph btnEdit_graph
+	ControlInfo/W=$bls.Graph btnEdit_graph
 	if (v_flag)
 		string strTitle = ""
 		sprintf strTitle, "\\K(%d,%d,0)Edit mode %s", 0xFFFF*bls.editmode, 0xFFFF*(!bls.editmode), SelectString(bls.editmode, "off", "on")
@@ -4328,16 +4724,16 @@ static function HoldYaxis(STRUCT BLstruct &bls)
 	if (strlen(strYax) == 0)
 		return 0
 	endif
-	GetAxis /W=$bls.graph/Q $strYax
-	SetAxis /W=$bls.graph $strYax, V_min, V_max
+	GetAxis/W=$bls.graph/Q $strYax
+	SetAxis/W=$bls.graph $strYax, V_min, V_max
 	return 1
 end
 
 // dependency function to define the spline curve
 static function DoSplineFit(wave w)
 		
-	DFREF dfr = GetDFREF()
-	wave /Z/SDFR=dfr w_nodesX, w_nodesY, w_base, w_sub
+	DFREF dfr = GetPackageDFREF()
+	wave/Z/SDFR=dfr w_nodesX, w_nodesY, w_base, w_sub
 	
 	STRUCT BLstruct bls
 	StructGet bls dfr:w_struct
@@ -4346,8 +4742,8 @@ static function DoSplineFit(wave w)
 		return NaN
 	endif
 
-	wave /Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 	
 	if (WaveExists(w_data) == 0)
 		return NaN
@@ -4401,9 +4797,9 @@ static function DoSplineFit(wave w)
 		DebuggerOptions debugOnError = 0 // switch this off in case interpolate fails
 		try
 			if (bls.XY)
-				Interpolate2 /E=(flagE)/F=(bls.flagF)/T=(flagT)/I=3/X=w_x/Y=w_base w_nodesX, w_nodesY; AbortOnRTE
+				Interpolate2/E=(flagE)/F=(bls.flagF)/T=(flagT)/I=3/X=w_x/Y=w_base w_nodesX, w_nodesY; AbortOnRTE
 			else
-				Interpolate2 /E=(flagE)/F=(bls.flagF)/T=(flagT)/I=3/Y=w_base w_nodesX, w_nodesY; AbortOnRTE
+				Interpolate2/E=(flagE)/F=(bls.flagF)/T=(flagT)/I=3/Y=w_base w_nodesX, w_nodesY; AbortOnRTE
 			endif
 		catch
 			variable CFerror = GetRTError(1)
@@ -4424,20 +4820,20 @@ end
 static function ResetNodes(STRUCT BLstruct &bls, [int OnTrace])
 	
 	if (bls.datalength == 0)
-		RemoveFromGraph /W=$bls.graph/Z w_nodesY
+		RemoveFromGraph/W=$bls.graph/Z w_nodesY
 		return 0
 	endif
 	
-	DFREF dfr = GetDFREF()
-	wave /SDFR=dfr w_nodesX, w_nodesY, w_base
+	DFREF dfr = GetPackageDFREF()
+	wave/SDFR=dfr w_nodesX, w_nodesY, w_base
 
 	// define some local variables
 	variable i, p_low, p_high, delP, delX
 	variable trace_offset = 0
 	
 	wave w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
-	Redimension /N=(bls.nodes) w_nodesX, w_nodesY
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	Redimension/N=(bls.nodes) w_nodesX, w_nodesY
 	
 	// determine axis names
 	string strInfo = TraceInfo(bls.graph,bls.trace,0)
@@ -4448,11 +4844,11 @@ static function ResetNodes(STRUCT BLstruct &bls, [int OnTrace])
 	
 	// keep nodes within window
 	GetAxis/Q $xAxisName
-	Make /N=2/free xrange={v_min, v_max}
+	Make/N=2/free xrange={v_min, v_max}
 	Sort xrange, xrange
 	
 	GetAxis/Q $yAxisName
-	Make /N=2/free yrange={v_min, v_max}
+	Make/N=2/free yrange={v_min, v_max}
 	Sort yrange, yrange
 	
 	// keep nodes within extent of w_data
@@ -4504,7 +4900,7 @@ static function ResetNodes(STRUCT BLstruct &bls, [int OnTrace])
 	endif
 	
 	string noteStr = bls.trace
-	note /K w_nodesY, noteStr
+	note/K w_nodesY, noteStr
 		
 	return 1
 end
@@ -4513,7 +4909,7 @@ end
 // all points of w_nodesX must lie within x-range of data
 static function GuessNodePositions(STRUCT BLstruct &bls, wave w_data, wave/Z w_x, wave w_base, wave w_nodesX, wave w_nodesY)
 	
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	StructPut bls dfr:w_struct // save current settings
 	
 	// adjust settings for an ArcHull type fit
@@ -4526,7 +4922,7 @@ static function GuessNodePositions(STRUCT BLstruct &bls, wave w_data, wave/Z w_x
 	StructGet bls dfr:w_struct // reload saved settings
 	
 	if (WaveExists(w_x))
-		Interpolate2 /T=1/Y=w_nodesY/X=w_nodesX/I=3 w_x, w_base
+		Interpolate2/T=1/Y=w_nodesY/X=w_nodesX/I=3 w_x, w_base
 	else
 		w_nodesY = w_base(w_nodesX)
 	endif
@@ -4538,15 +4934,15 @@ end
 static function SetNodes(STRUCT BLstruct &bls, [int OnTrace])
 	
 	if (bls.datalength == 0)
-		RemoveFromGraph /W=$bls.graph/Z w_nodesY
+		RemoveFromGraph/W=$bls.graph/Z w_nodesY
 		return 0
 	endif
 	
-	wave /Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
 	
-	DFREF dfr = GetDFREF()
-	wave /SDFR=dfr w_nodesX, w_nodesY, w_base
+	DFREF dfr = GetPackageDFREF()
+	wave/SDFR=dfr w_nodesX, w_nodesY, w_base
 	variable numNodes = numpnts(w_nodesY)
 	
 	if (numNodes < 2)
@@ -4567,10 +4963,10 @@ static function SetNodes(STRUCT BLstruct &bls, [int OnTrace])
 				
 		// remove duplicate nodes,
 		// in case some were outside of the range of w_data
-		Duplicate /free w_nodesX w_duplicates
-		FindDuplicates /SN=(NaN)/SNDS=w_duplicates w_nodesX
-		Extract /O w_nodesX, w_nodesX, numtype(w_duplicates)==0
-		Extract /O w_nodesY, w_nodesY, numtype(w_duplicates)==0
+		Duplicate/free w_nodesX w_duplicates
+		FindDuplicates/SN=(NaN)/SNDS=w_duplicates w_nodesX
+		Extract/O w_nodesX, w_nodesX, numtype(w_duplicates)==0
+		Extract/O w_nodesY, w_nodesY, numtype(w_duplicates)==0
 	endif
 	
 	onTrace = ParamIsDefault(OnTrace) ? bls.options & 0x10 : OnTrace
@@ -4593,7 +4989,7 @@ static function SetNodes(STRUCT BLstruct &bls, [int OnTrace])
 	endif
 	
 	string noteStr = bls.trace
-	note /K w_nodesY, noteStr
+	note/K w_nodesY, noteStr
 	return 1
 end
 
@@ -4603,15 +4999,8 @@ static function LoadNodes(STRUCT BLstruct &bls)
 		return 0
 	endif
 	
-	DFREF dfr = GetDFREF()
-	
-	wave w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	if (bls.options & 0x100)
-		DFREF listDFR = GetDataFolderDFR()
-	else
-		DFREF listDFR = GetWavesDataFolderDFR(w_data)
-	endif
-			
+	DFREF dfr = GetPackageDFREF()
+	DFREF listDFR = GetOutputDataFolder(bls)
 	string str_NodeWave
 	variable LoadY
 	
@@ -4622,13 +5011,13 @@ static function LoadNodes(STRUCT BLstruct &bls)
 		return 0
 	endif
 	loadY -= 1
-	wave /Z w_nodes = listDFR:$str_NodeWave
+	wave/Z w_nodes = listDFR:$str_NodeWave
 	if (WaveExists(w_nodes) == 0)
 		return 0
 	endif
 		
-	wave /SDFR=dfr w_nodesX, w_nodesY
-	Redimension /N=(DimSize(w_nodes, 0)), w_nodesX, w_nodesY
+	wave/SDFR=dfr w_nodesX, w_nodesY
+	Redimension/N=(DimSize(w_nodes, 0)), w_nodesX, w_nodesY
 	w_nodesX = w_nodes[p][0]
 	
 	if (LoadY)
@@ -4642,7 +5031,7 @@ static function LoadNodes(STRUCT BLstruct &bls)
 	return 1
 end
 
-static function /S WaveListDFR(string matchStr, string separatorStr, string optionsStr, DFREF dfr)
+static function/S WaveListDFR(string matchStr, string separatorStr, string optionsStr, DFREF dfr)
 	DFREF DFsav = GetDataFolderDFR()
 	SetDataFolder dfr
 	string strList = WaveList(matchStr, separatorStr, optionsStr)
@@ -4660,7 +5049,7 @@ end
 // after M. Bongard, 11/17/09
 
 static function Akima(wave w_nodesX, wave w_nodesY, wave w_interp, [wave/Z xwave])
-	wave /Z w_iota = AkimaIota(w_nodesX, w_nodesY)
+	wave/Z w_iota = AkimaIota(w_nodesX, w_nodesY)
 	if (WaveExists(w_iota))
 		if (WaveExists(xwave))
 			multithread w_interp = AkimaThread(xwave[p], w_nodesX, w_nodesY, w_iota)
@@ -4672,7 +5061,7 @@ static function Akima(wave w_nodesX, wave w_nodesY, wave w_interp, [wave/Z xwave
 	return 0
 end
 
-static function /wave AkimaIota(wave knotX, wave knotY)
+static function/wave AkimaIota(wave knotX, wave knotY)
 	
  	// removed some sanity checks, converted to wave function
 	variable numKnots = numpnts(knotX)
@@ -4714,10 +5103,10 @@ static function /wave AkimaIota(wave knotX, wave knotY)
  
 	// kX, kY are now properly populated, including extrapolated endpoints
  
-	Make /D/FREE/N=(numKnots + 4 - 1) mK
+	Make/D/FREE/N=(numKnots + 4 - 1) mK
 	mK = (kY[p+1]-kY)/(kX[p+1]-kX)
  
-	Make /free/N=(numKnots) w_Iota
+	Make/free/N=(numKnots) w_Iota
 	w_Iota = ( abs(mK[p+3]-mK[p+2])*mK[p+1] + abs(mK[p+1]-mK[p])*mK[p+2] ) / (abs(mK[p+3]-mK[p+2])+abs(mK[p+1]-mK))
 	w_Iota = numtype(w_Iota) == 0 ? w_Iota : 0.5*(mK[p+1]+mK[p+2])
 	return w_Iota
@@ -4733,7 +5122,7 @@ threadsafe static function AkimaEndPoints(wave kX, wave kY)
 	kX[4] = 2*kX[2] - kX[0]
  
 	// eq. (12)-(14), determine gradient on [0,1]
-	Make /N=4/FREE mi
+	Make/N=4/FREE mi
 	mi = (kY[p+1]-kY)/(kX[p+1]-kX)
  
 	// Determine remainder of quantities by applying solutions of eq (9)
@@ -4752,7 +5141,7 @@ threadsafe static function AkimaThread(variable x, wave w_nodesX, wave w_nodesY,
 	elseif (x >= WaveMax(w_nodesX))
 		p0 = numpnts(w_nodesX) - 2
 	else
-		FindLevel /P/EDGE=1/Q w_nodesX, x
+		FindLevel/P/EDGE=1/Q w_nodesX, x
 		if (v_flag == 1) // not found
 			return NaN
 		endif
@@ -4784,7 +5173,7 @@ end
 
 // populate w_interp with interpolated values from piecewise cubic
 // Hermite spline
-static function PCHIP(wave w_nodesX, wave w_nodesY, wave w_interp, [wave /Z xwave])
+static function PCHIP(wave w_nodesX, wave w_nodesY, wave w_interp, [wave/Z xwave])
 	if (numpnts(w_nodesX) == 2) // linear interpolation
 		if (WaveExists(xwave))
 			w_interp = w_nodesY[0] + (xwave[p] - w_nodesX[0]) / (w_nodesX[1]-w_nodesX[0])*(w_nodesY[1]-w_nodesY[0])
@@ -4811,13 +5200,13 @@ end
 // FN Fritsch and J Butland (1984) A method for constructing local
 // monotone piecewise cubic interpolants, SIAM Journal on Scientific and
 // Statistical Computing 5: 300-304.
-static function /WAVE PCHIP_SetDerivatives(wave w_nodesX, wave w_nodesY)
-	Duplicate /free w_nodesX, w_d, w_a
+static function/WAVE PCHIP_SetDerivatives(wave w_nodesX, wave w_nodesY)
+	Duplicate/free w_nodesX, w_d, w_a
 	// w_d will be set to desired derivatives at node positions
 	// w_a will be used as weighting for harmonic means
 	w_d = 0
 	
-	Make /free/N=(numpnts(w_nodesX)-1), w_m, w_delx
+	Make/free/N=(numpnts(w_nodesX)-1), w_m, w_delx
 	// w_m[i] is gradient between node i and i+1
 	// w_delx[i] and w_delx[i-1] are x offsets of nodes i+1 and i-1
 	
@@ -4859,7 +5248,7 @@ threadsafe static function PCHIP_Interpolate(wave w_nodesX, wave w_nodesY, wave 
 	elseif (x >= WaveMax(w_nodesX))
 		p0 = numpnts(w_nodesX) - 2
 	else
-		FindLevel /P/EDGE=1/Q w_nodesX, x
+		FindLevel/P/EDGE=1/Q w_nodesX, x
 		if (v_flag == 1) // not found
 			return NaN
 		endif
@@ -4886,10 +5275,10 @@ static function DoAutoFit(STRUCT BLstruct &bls)
 		return 0
 	endif
 		
-	DFREF dfr = GetDFREF()
+	DFREF dfr = GetPackageDFREF()
 	wave w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave /Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
-	wave /Z/SDFR=dfr w_sub, w_base
+	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
+	wave/Z/SDFR=dfr w_sub, w_base
 	
 	string strNote = ""
 	int p1 = 0, p2 = bls.datalength - 1
@@ -4904,20 +5293,23 @@ static function DoAutoFit(STRUCT BLstruct &bls)
 		
 		wave w_fullbase = dfr:w_base
 		wave w_fulldata = w_data
-		wave /Z w_fullx = w_x
+		wave/Z w_fullx = w_x
 		waveclear w_base, w_x, w_data
-		Duplicate /free/R=[p1,p2] w_fulldata w_data, w_base
+		Duplicate/free/R=[p1,p2] w_fulldata w_data, w_base
 		if (bls.XY)
-			Duplicate /free/R=[p1,p2] w_fullx w_x
+			Duplicate/free/R=[p1,p2] w_fullx w_x
 		endif
 	endif
 			
-	if (cmpstr(bls.fitfunc, "arc hull") && cmpstr(bls.fitfunc, "hull spline"))
+	if (cmpstr(bls.fitfunc, "arc hull") && cmpstr(bls.fitfunc, "hull spline") && cmpstr(bls.fitfunc, "ARS"))
 		DoIterativeFit(bls, w_data, w_x, w_base)
 		strNote = note(w_base)
+	elseif (cmpstr(bls.fitfunc, "ARS") == 0)
+		ARS(bls, w_data, w_base, w_x)
+		sprintf strNote, "type=ARS;iterations=%g;SD=%g;hull=%g;smoothing=%g;negative=%g;", bls.arsits, bls.arssd, bls.hull, bls.smoothing, (bls.options&8)!=0
 	else // do arc hull calculation
 		DoArcHull(bls, w_data, w_x, w_base)
-		sprintf strNote, "type=%s;depth=%g;smoothing=%g;", ReplaceString(" ", bls.fitfunc, "-"), bls.depth, bls.smoothing
+		sprintf strNote, "type=%s;depth=%g;smoothing=%g;negative=%g;", ReplaceString(" ", bls.fitfunc, "-"), bls.depth, bls.smoothing, (bls.options&8)!=0
 	endif
 	
 	// update baseline and sub waves
@@ -4929,9 +5321,9 @@ static function DoAutoFit(STRUCT BLstruct &bls)
 		endif
 		
 		// reset wave refs back to 'normal'
-		wave /SDFR=dfr w_base
+		wave/SDFR=dfr w_base
 		wave w_data = w_fulldata
-		wave /Z w_x = w_fullx
+		wave/Z w_x = w_fullx
 		
 		PadSubrange(bls, w_data, w_base)
 	endif
@@ -4943,16 +5335,16 @@ static function DoAutoFit(STRUCT BLstruct &bls)
 		variable x2 = bls.XY ? w_x[numpnts(w_x) - 1] : pnt2x(w_data, P2)
 		sprintf strNote, "%soutput range=(%g,%g);", strNote, min(x1, x2), max(x1, x2)
 	endif
-	note /K w_base "Baseline Parameters:" + strNote
+	note/K w_base "Baseline Parameters:" + strNote
 	
 	return 1
 end
 
 // the supplied waves may be free waves representing a subrange of the data
-static function DoIterativeFit(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave w_base)
+static function DoIterativeFit(STRUCT BLstruct &bls, wave w_data, wave/Z w_x, wave w_base)
 	
 	int numPoints = numpnts(w_data)
-	Duplicate /free w_data w1, w2, w_test
+	Duplicate/free w_data w1, w2, w_test
 	if (bls.smoothing)
 		Smooth bls.smoothing, w1
 	endif
@@ -4976,12 +5368,10 @@ static function DoIterativeFit(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, w
 		endif
 		
 		if (i==0 && bls.hull)
-					
 			DoHalfHull(bls, wIn, w_x)
 			wave w_XHull, w_YHull
 			success = FitFuncs(bls, w_YHull, w_XHull, $"", w_YHull)
 			FitFuncs(bls, $"", w_x, $"", w_base, dofit=0)
-			
 		else
 			success = FitFuncs(bls, wIn, w_x, $"", w_base)
 		endif
@@ -5028,7 +5418,7 @@ static function DoIterativeFit(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, w
 		FastOp w_test = wOut - wIn
 		FastOp w_test = 1 / w_test
 
-		WaveStats /Q/M=1 w_test
+		WaveStats/Q/M=1 w_test
 		if (i>20 && v_npnts<=conv) // converged
 			break
 		else
@@ -5039,13 +5429,18 @@ static function DoIterativeFit(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, w
 	DebuggerOptions debugOnError=sav_debug
 	
 	string strNote = ""
-	sprintf strNote, "type=iterative;function=%s;iterations=%d;errors=%d;smoothing=%g;hull=%d;%s", bls.fitfunc, i+1, !success, bls.smoothing, bls.hull, CoefficientString()
-	note /K w_base, strNote
+	
+	if (cmpstr(bls.fitfunc, "spline") == 0)
+		sprintf strNote, "type=iterative;function=%s;iterations=%d;errors=%d;sd=%g;hull=%d;smoothing=%g;negative=%g;", bls.fitfunc, i+1, !success, bls.sd, bls.hull, bls.smoothing, (bls.options&8)!=0
+	else
+		sprintf strNote, "type=iterative;function=%s;iterations=%d;errors=%d;hull=%d;smoothing=%g;negative=%g;%s", bls.fitfunc, i+1, !success, bls.hull, bls.smoothing, (bls.options&8)!=0, CoefficientString()
+	endif
+	note/K w_base, strNote
 end
 
-static function /S CoefficientString()
-	wave /Z w_coef = w_coef
-	if (waveexists(w_coef) == 0)
+static function/S CoefficientString()
+	wave/Z w_coef = w_coef
+	if (WaveExists(w_coef) == 0)
 		return ""
 	endif
 	string coefStr = "w_coef={"
@@ -5059,12 +5454,12 @@ end
 
 // populates w_base with archull/hullspline baseline calculated from w_data
 // the supplied waves may be free waves representing a subrange of the data
-static function DoArcHull(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave w_base)
+static function DoArcHull(STRUCT BLstruct &bls, wave w_data, wave/Z w_x, wave w_base)
 		
 	int datalength = numpnts(w_data)
 	
 	// make a copy of the (possibly smoothed) data wave
-	Duplicate /free w_data w_smoothed, w_arc
+	Duplicate/free w_data w_smoothed, w_arc
 	if (bls.smoothing > 0)
 		Smooth bls.smoothing, w_smoothed
 	endif
@@ -5073,11 +5468,11 @@ static function DoArcHull(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave w
 	// calculate arc hull based on (possibly smoothed) data
 	
 	if (bls.XY == 0)
-		Duplicate /free w_base w_x
+		Duplicate/free w_base w_x
 		// redimension to make sure we don't get hull vertices
 		// outside the range of w_x owing to difference in precision
 		// of output from ConvexHull
-		Redimension /D w_x
+		Redimension/D w_x
 		if (datalength > kMultithreadCutoff)
 			multithread w_x = x
 		else
@@ -5111,23 +5506,23 @@ static function DoArcHull(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave w
 		return 0
 	endif
 	
-	ConvexHull /Z w_x, w_base
-	wave /Z w_XHull, w_YHull
+	ConvexHull/Z w_x, w_base
+	wave/Z w_XHull, w_YHull
 	
 	if (bls.XY == 0)
-		wave /Z w_x = $""
+		wave/Z w_x = $""
 	endif
 
 	if ((bls.options & 8) == 0)
-		Reverse /P w_XHull, w_YHull
+		Reverse/P w_XHull, w_YHull
 	endif
 	// negative depth will subtract top part of convex hull
 	// an offset will likely need to be applied
 	
-	WaveStats /Q w_XHull
+	WaveStats/Q w_XHull
 	Rotate -v_minloc, w_XHull, w_YHull
-	SetScale /P x, 0, 1, w_XHull, w_YHull
-	WaveStats /Q w_XHull
+	SetScale/P x, 0, 1, w_XHull, w_YHull
+	WaveStats/Q w_XHull
 	DeletePoints v_maxloc+1, numpnts(w_XHull)-v_maxloc-1, w_XHull, w_YHull
 		
 	if (cmpstr(bls.fitfunc, "hull spline") == 0) // hull spline - prepare nodes
@@ -5148,14 +5543,14 @@ static function DoArcHull(STRUCT BLstruct &bls, wave w_data, wave /Z w_x, wave w
 	endif
 end
 
-static function DoHalfHull(STRUCT BLstruct &bls, wave w_data, wave /Z w_x)
+static function DoHalfHull(STRUCT BLstruct &bls, wave w_data, wave/Z w_x)
 	
 	if (bls.XY == 0)
-		Duplicate /free w_data w_x
+		Duplicate/free w_data w_x
 		// redimension to make sure we don't get hull vertices
 		// outside the range of w_x owing to difference in precision
 		// of output from ConvexHull
-		Redimension /D w_x
+		Redimension/D w_x
 		if (numpnts(w_data) > kMultithreadCutoff)
 			multithread w_x = x
 		else
@@ -5163,51 +5558,110 @@ static function DoHalfHull(STRUCT BLstruct &bls, wave w_data, wave /Z w_x)
 		endif
 	endif
 
-	ConvexHull /Z w_x, w_data
+	ConvexHull/Z w_x, w_data
 	wave w_XHull, w_YHull
 	if ((bls.options&8) == 0)
-		Reverse /P w_XHull, w_YHull
+		Reverse/P w_XHull, w_YHull
 	endif
-	WaveStats /Q w_XHull
+	WaveStats/Q w_XHull
 	Rotate -v_minloc, w_XHull, w_YHull
-	SetScale /P x, 0, 1, w_XHull, w_YHull
-	WaveStats /Q w_XHull
+	SetScale/P x, 0, 1, w_XHull, w_YHull
+	WaveStats/Q w_XHull
 	DeletePoints v_maxloc+1, numpnts(w_XHull)-v_maxloc-1, w_XHull, w_YHull
+end
+
+static function/wave ARS(STRUCT BLstruct &bls, wave data, wave base, wave/Z w_x)
+
+	Duplicate /free data W_tofit, freebase
+	
+	if (bls.smoothing)
+		Smooth bls.smoothing, W_tofit
+	endif
+	
+	// scale the input data
+	variable f = 1000 / (WaveMax(data)-WaveMin(data))
+	FastOp W_tofit = (f) * W_tofit
+	
+	DebuggerOptions
+	variable sav_debug = V_debugOnError
+	DebuggerOptions debugOnError = 0 // switch this off in case interpolate fails
+	
+	try
+
+		if (bls.hull)
+			DoHalfHull(bls, W_tofit, w_x)
+			wave w_XHull, w_YHull
+			if (bls.XY)
+				Interpolate2/E=(2)/F=(1)/S=(bls.arssd)/T=(3)/I=3/X=w_x/Y=freebase w_XHull, w_YHull
+			else
+				Interpolate2/E=(2)/F=(1)/S=(bls.arssd)/T=(3)/I=3/Y=freebase w_XHull, w_YHull
+			endif
+			if (bls.options & 8) // negative peaks
+				W_tofit = (freebase - (f*data)) > 1 ? freebase - (freebase - (f*data))^0.25 : W_toFit
+			else
+				W_tofit = ((f*data) - freebase) > 1 ? freebase + ((f*data) - freebase)^0.25 : W_toFit  // w_data
+			endif
+		endif
+
+		int i
+		for(i=0;i<bls.arsits;i++)
+			if (bls.XY)
+				Interpolate2/E=(2)/F=(1)/S=(bls.arssd)/T=(3)/I=3/X=w_x/Y=freebase w_x, W_tofit; AbortOnRTE
+			else
+				Interpolate2/E=(2)/F=(1)/S=(bls.arssd)/T=(3)/I=3/Y=freebase W_tofit; AbortOnRTE
+			endif
+
+			if (bls.options & 8) // negative peaks
+				W_tofit = (freebase - (f*data)) > 1 ? freebase - (freebase - (f*data))^0.25 : W_toFit
+			else
+				W_tofit = ((f*data) - freebase) > 1 ? freebase + ((f*data) - freebase)^0.25 : W_toFit  // w_data
+			endif
+		endfor
+
+	catch
+		variable CFerror = GetRTError(1)
+		Print "Error during interpolate:", GetErrMessage(CFerror)
+	endtry
+	DebuggerOptions debugOnError=sav_debug
+
+	FastOp freebase = (1/f) * freebase
+	FastOp base = freebase
+	return freebase
 end
 
 // wrapper for interpolate2, handles case of free output wave for older Igor versions
 static function DoInterpolation(int Tflag, wave w_yout, wave/Z w_xout, wave w_y, wave/Z w_x)
 	
 	if (WaveExists(w_x) == 0)
-		Duplicate /free w_y w_x
+		Duplicate/free w_y w_x
 		w_x = x
 	endif
 	
 	#if (IgorVersion() >= 9)
 	if (WaveExists(w_xout))
-		Interpolate2 /T=(Tflag)/E=2/Y=w_yout/X=w_xout/I=3 w_x, w_y
+		Interpolate2/T=(Tflag)/E=2/Y=w_yout/X=w_xout/I=3 w_x, w_y
 	else
-		Interpolate2 /T=(Tflag)/E=2/Y=w_yout/I=3 w_x, w_y
+		Interpolate2/T=(Tflag)/E=2/Y=w_yout/I=3 w_x, w_y
 	endif
 	#else
 	int isFree = 0
 	if (WaveType	(w_yout, 2) == 2) // free
-		Duplicate /free w_yout w_yout8
+		Duplicate/free w_yout w_yout8
 		isFree = 1
 	else
 		wave w_yout8 = w_yout
 	endif
 
 	if (WaveExists(w_xout) && WaveRefsEqual(w_x, w_xout))
-		Duplicate /free w_xout w_xout8
+		Duplicate/free w_xout w_xout8
 	else
-		wave /Z w_xout8 = w_xout
+		wave/Z w_xout8 = w_xout
 	endif
 
 	if (WaveExists(w_xout8))
-		Interpolate2 /T=(Tflag)/E=2/Y=w_yout8/X=w_xout8/I=3 w_x, w_y
+		Interpolate2/T=(Tflag)/E=2/Y=w_yout8/X=w_xout8/I=3 w_x, w_y
 	else
-		Interpolate2 /T=(Tflag)/E=2/Y=w_yout8/I=3 w_x, w_y
+		Interpolate2/T=(Tflag)/E=2/Y=w_yout8/I=3 w_x, w_y
 	endif
 
 	if (isFree) // w_yout8 doesn't reference w_yout after interpolate2
@@ -5217,9 +5671,9 @@ static function DoInterpolation(int Tflag, wave w_yout, wave/Z w_xout, wave w_y,
 end
 
 // when w_x is null this defaults to w(v_x); no error for out-of-range x
-threadsafe static function GetYfromWavePair(variable v_x, wave w, wave /Z w_x)
-	if (waveexists(w_x))
-		FindLevel /Q/P w_x, v_x
+threadsafe static function GetYfromWavePair(variable v_x, wave w, wave/Z w_x)
+	if (WaveExists(w_x))
+		FindLevel/Q/P w_x, v_x
 		if (v_flag == 0)
 			return w[V_LevelX]
 		endif
@@ -5236,14 +5690,14 @@ end
 
 // returns, as a free wave, the coefficients for the polynomial that
 // passes through the unique points in the 2D coordinates wave
-threadsafe static function /wave PolyCoeffcients(wave coordinates)
+threadsafe static function/wave PolyCoeffcients(wave coordinates)
 	int numP = DimSize(coordinates, 0)
 
 	if (numP > 5)
-		Make /free/N=(numP,numP)/D MA
+		Make/free/N=(numP,numP)/D MA
 		MA = coordinates[p][0]^q
-		Make /free/N=(numP)/D w = coordinates[p][1]
-		MatrixLinearSolve /O MA, w
+		Make/free/N=(numP)/D w = coordinates[p][1]
+		MatrixLinearSolve/O MA, w
 		return w
 	endif
 	
@@ -5291,7 +5745,7 @@ threadsafe static function /wave PolyCoeffcients(wave coordinates)
 			C = A3/B3 - D*C3/B3 - E*D3/B3
 			B = (y5-y4)/(x5-x4) + C*(x4^2-x5^2)/(x5-x4) + D*(x4^3-x5^3)/(x5-x4) + E*(x4^4-x5^4)/(x5-x4)
 			A = y1 - B * x1 - C * x1^2 - D * x1^3 - E * x1^4
-			Make /free w_coef = {A, B, C, D, E}
+			Make/free w_coef = {A, B, C, D, E}
 			break
 		case 4 :
 			variable E1, E2, E3, E4, E5, E6
@@ -5306,23 +5760,104 @@ threadsafe static function /wave PolyCoeffcients(wave coordinates)
 			C = (E5 + D * E3) / E1
 			B = (y3 - y4 + D*(x4^3 - x3^3) + C*(x4^2 - x3^2))/(x3-x4)
 			A = y4 - D * x4^3 - C * x4^2 - B * x4
-			Make /free w_coef = {A, B, C, D}
+			Make/free w_coef = {A, B, C, D}
 			break
 		case 3 :
 			C = (x1*(y3-y2) + x2*(y1-y3) + x3*(y2-y1)) / ((x1-x2)*(x1-x3)*(x2-x3))
 			B = (y2-y1)/(x2-x1) - C*(x1+x2)
 			A = y1 - C*x1^2 - B*x1
-			Make /free w_coef = {A, B, C}
+			Make/free w_coef = {A, B, C}
 			break
 		case 2 :
-			Make /free w_coef = {y1-x1*(y2-y1)/(x2-x1), (y2-y1)/(x2-x1)}
+			Make/free w_coef = {y1-x1*(y2-y1)/(x2-x1), (y2-y1)/(x2-x1)}
 			break
 		case 1 :
-			Make /free w_coef = {y1}
+			Make/free w_coef = {y1}
 			break
 	endswitch
 
 	return w_coef
+end
+
+// Planck fitting functions
+threadsafe static function planckmuM(wave w, variable wavelength)
+	return planck(w, wavelength*1000)
+end
+
+threadsafe static function planckAngstrom(wave w, variable wavelength)
+	return planck(w, wavelength/10)
+end
+
+threadsafe static function planckWN(wave w, variable wavenumber)
+	return planck(w, 1e7/wavenumber)
+end
+
+// convert wavelength units to nm for planck function
+threadsafe static function wl2nm(STRUCT BLstruct &bls, variable wl)
+	switch (bls.wavelength)
+		case 2: // micron
+			return wl * 1000
+		case 3: // wavenumber
+			return 1e7 / wl
+		case 4: // angstrom
+			return wl / 10
+	endswitch
+	return wl
+end
+
+// wavelength in nm
+threadsafe static function planck(w, wavelength) : FitFunc
+	Wave w
+	variable wavelength
+
+	//CurveFitDialog/ These comments were created by the Curve Fitting dialog. Altering them will
+	//CurveFitDialog/ make the function less convenient to work with in the Curve Fitting dialog.
+	//CurveFitDialog/ Equation:
+	//CurveFitDialog/ variable wl = wavelength/1e9
+	//CurveFitDialog/ variable c = 299792458 // m/s
+	//CurveFitDialog/ variable h = 6.62607015e-34 // J/Hz
+	//CurveFitDialog/ variable kB = 1.380649e-23 // J/K
+	//CurveFitDialog/ f(wavelength) = w_1*2*h*c^2/wl^5/(exp(h*c/(wl*kB*w_0))-1)
+	//CurveFitDialog/ //	return w[1]*2*h*f^3/c^2/(exp(h*f/kB/w[0])-1)
+	//CurveFitDialog/ End of Equation
+	//CurveFitDialog/ Independent Variables 1
+	//CurveFitDialog/ wavelength
+	//CurveFitDialog/ Coefficients 2
+	//CurveFitDialog/ w[0] = w_0
+	//CurveFitDialog/ w[1] = w_1
+
+	variable wl = wavelength/1e9
+	variable c = 299792458 // m/s
+	variable h = 6.62607015e-34 // J/Hz
+	variable kB = 1.380649e-23 // J/K
+	// hc/kB = 0.0143877687750393
+	// 2hc^2 * 1e9^5 = 1.19104297239719e+29
+	return w[1]*1.19104297239719e+29/wavelength^5/(exp(14387768.7750393/(wavelength*w[0]))-1)
+	// return w[1]*2*h*c^2/wl^5/(exp(h*c/(wl*kB*w[0]))-1)
+end
+
+// *** user-defined fit function prototypes ***
+
+static function/S GetListOfUserFuncs()
+	string funcList = FunctionList("*", ";", "KIND:10,SUBTYPE:FitFunc")
+	int i
+	string strFunc = ""
+	for (i=ItemsInList(funcList)-1;i>=0;i--)
+		strFunc = StringFromList(i, funcList)
+		if (strlen(strFunc)>32 || exists(strFunc + "Guess")!=6)
+			funcList = RemoveListItem(i, funcList)
+		endif
+	endfor
+	return funcList
+end
+
+function BaselineGuessPrototype(wave yw, wave xw, wave mask)
+end
+
+function BaselineFitPrototype(wave cw, variable x)
+end
+
+function BaselineFitAAWPrototype(wave cw, wave yw, wave xw)
 end
 
 // *** proc pictures ***
@@ -6016,59 +6551,3 @@ static Picture pPoly
 	'&<G%(0tl`Jz8OZBBY!QNJ
 	ASCII85End
 end
-
-// ---------  Example user-defined fit function.   ------------------
-
-// Edit these three functions where indicated:
-
-// 1. The fit function (you might replace the body of this function with
-// that of one created by choosing 'new fit function' in Igor's curve
-// fitting dialog). This example fits a line.
-// Don't edit this part:
-static function UserFunc(w, x) : FitFunc
-	wave w // the coefficient wave
-	variable x // the independent variable
-	
-	// edit this part:
-	return w[0] + w[1] * x
-end
-
-// 2. Set the initial guesses for the fit coefficients
-static function UserInitialGuess()
-	
-	// if you don't need any info to guide your initial guess for the fit
-	// coefficients you can ignore this part
-	DFREF dfr = GetDFREF()
-	STRUCT BLstruct bls
-	StructGet bls dfr:w_struct
-	
-	wave/Z/SDFR=dfr w_mask
-	wave/Z w_data = TraceNameToWaveRef(bls.graph, bls.trace)
-	wave/Z w_x = XWaveRefFromTrace(bls.graph, bls.trace)
-	
-	// Edit this part to create the coefficient wave. If you need them,
-	// the wave refs for the wave to be fit, the mask wave and the x wave
-	// are w_data, w_mask, and w_x, respectively. Just editing the list
-	// within the curly braces, e.g. {3,4,5}, should be sufficient for a
-	// simple fit function.
-	
-	Make/D/N=0/O W_coef  // don't change this line
-	
-	W_coef[0] = {1,1}  // set the initial guesses here
-end
-
-// 3. Set the name of your fit here:
-static function /S UserFitName()
-
-	// Insert a unique name for your fit between the quotes, 
-	// e.g. FitName = "My Fit". 
-	string FitName = "MyLine"
-	// That's it! Next time you start the package you should see your 
-	// function in the baseline type list. 
-	
-	return FitName[0,32]
-end
-
-// note: when this package is updated any edits you have made here will 
-// be lost, so it's probably a good idea to keep a copy of your custom 
-// fit code.
